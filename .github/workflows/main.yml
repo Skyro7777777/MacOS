@@ -24,7 +24,7 @@ on:
 jobs:
   setup-remote:
     runs-on: macos-latest
-    timeout-minutes: ${{ fromJson(github.event.inputs.duration) + 10 }}
+    timeout-minutes: ${{ fromJson(github.event.inputs.duration)  }}
 
     steps:
       # ==========================================
