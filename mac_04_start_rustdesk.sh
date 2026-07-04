@@ -14,25 +14,43 @@ log "Step 04 — launch RustDesk in GUI session + verify port $RUSTDESK_PORT"
 #     Tailscale IP to touch the done-flag file without using the RustDesk GUI.
 #     (Tailscale's own --ssh doesn't work with the brew CLI build — see
 #     mac_01_install_tailscale.sh — so we enable the built-in macOS sshd instead.)
+#
+#     NOTE: `systemsetup -setremotelogin on` FAILS on Sequoia without Full
+#     Disk Access.  Use the modern `launchctl bootstrap` API on the ssh.plist
+#     LaunchDaemon instead — this works on Sequoia without extra TCC grants.
 log "enabling Remote Login (sshd) for done-flag SSH fallback"
-sudo systemsetup -setremotelogin on 2>/dev/null || true
-sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || true
+sudo launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || {
+  # if already bootstrapped, just enable it
+  sudo launchctl enable system/com.openssh.sshd 2>/dev/null || true
+  sudo launchctl kickstart -k system/com.openssh.sshd 2>/dev/null || true
+}
+sudo launchctl enable system/com.openssh.sshd 2>/dev/null || true
 
 # --- 1. make sure nothing stale is running ----------------------------------
 pkill -x RustDesk 2>/dev/null || true
 sleep 1
 
-# --- 2. (re)apply the direct-IP config in case prefs got reset ---------------
-gui_run "$RUSTDESK_BIN" --password "$RUSTDESK_PASSWORD" || true
-gui_run "$RUSTDESK_BIN" --option direct-server=Y || true
-gui_run "$RUSTDESK_BIN" --option "direct-access-port=$RUSTDESK_PORT" || true
-gui_run "$RUSTDESK_BIN" --option relay-server= || true
-gui_run "$RUSTDESK_BIN" --option custom-rendezvous-server= || true
-gui_run "$RUSTDESK_BIN" --option api-server= || true
+# --- 2. config was already written by mac_02 (RustDesk.toml + RustDesk2.toml
+#     with the [options] subtable).  The RustDesk CLI flags --password/--option
+#     require root and refuse to run as the user, so we do NOT re-apply them
+#     here.  The TOML files are the source of truth.
 
-# --- 3. load the LaunchAgent (KeepAlive) and also open the app --------------
-# LaunchAgent ensures it restarts if it crashes; open -a brings the window up.
-launchctl load "/Users/$RUNNER_USER/Library/LaunchAgents/com.carriez.RustDesk_server.plist" 2>/dev/null || true
+# --- 3. load the launchd plists via the modern bootstrap API ----------------
+# `launchctl load` is deprecated on macOS 15; use `launchctl bootstrap`.
+#   - LaunchDaemon (root, --service):  bootstrap into the system domain
+#   - LaunchAgent (user, --server):    bootstrap into the runner's GUI domain
+log "loading RustDesk LaunchDaemon (root, --service)"
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.carriez.RustDesk_service.plist 2>/dev/null || {
+  # already bootstrapped from a prior run — kickstart it instead
+  sudo launchctl kickstart -k system/com.carriez.RustDesk_service 2>/dev/null || true
+}
+
+log "loading RustDesk LaunchAgent (runner, --server, Aqua session)"
+sudo launchctl bootstrap "gui/$RUNNER_UID" "/Users/$RUNNER_USER/Library/LaunchAgents/com.carriez.RustDesk_server.plist" 2>/dev/null || {
+  sudo launchctl kickstart -k "gui/$RUNNER_UID/com.carriez.RustDesk_server" 2>/dev/null || true
+}
+
+# also open the GUI app so it registers with LaunchServices and shows its window
 gui_run open -a RustDesk || true
 
 # --- 4. wait for the direct-server port to come up --------------------------

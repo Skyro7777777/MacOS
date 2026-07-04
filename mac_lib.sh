@@ -32,6 +32,11 @@ export MAC_USER
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${STATE_DIR:-/tmp/apple-project}"
 mkdir -p "$STATE_DIR"
+# Make STATE_DIR world-writable (1777) so BOTH the runner user (RustDesk,
+# AppleScript) AND the cihelper SSH user can touch the done-flag file.
+# Without this, `ssh cihelper@... 'touch /tmp/apple-project/remote-done'`
+# fails with "Permission denied".
+chmod 1777 "$STATE_DIR"
 export PROJECT_ROOT STATE_DIR
 
 # the file whose existence ends the hold loop in mac_05_hold_session.sh
