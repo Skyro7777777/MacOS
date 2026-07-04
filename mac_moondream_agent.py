@@ -129,13 +129,23 @@ def load_model():
     log(f"device={_device} dtype={dtype}")
 
     log(f"loading {MODEL_ID} (rev={MODEL_REV}) ...")
+    # CRITICAL: on MPS, do NOT use device_map — transformers 4.56.1's
+    # caching_allocator_warmup tries to allocate the full model (3.59 GiB)
+    # as a SINGLE torch.empty buffer, which hits Metal's 4 GiB per-buffer
+    # limit → "RuntimeError: Invalid buffer size: 3.59 GiB".
+    # The warmup is gated on `device_map is not None`, so passing None
+    # skips it. Then .to("mps") moves params one at a time (each well
+    # under the limit). See vikhyat/moondream issue #282.
+    _use_device_map = None if str(_device) == "mps" else {"": _device}
     _model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
         revision=MODEL_REV,
         trust_remote_code=True,
         dtype=dtype,
-        device_map={"": _device},
+        device_map=_use_device_map,
     )
+    if str(_device) == "mps":
+        _model = _model.to(_device)
     _model.eval()
     log("model ready")
 
@@ -195,7 +205,13 @@ def grant_permissions() -> bool:
     for step in range(MAX_STEPS):
         log(f"=== step {step + 1}/{MAX_STEPS} ===")
 
-        # 1. make sure RustDesk is open + in front
+        # 1. make sure RustDesk is open + in front.
+        #    On the first step RustDesk may not be running yet — open it.
+        #    bring_to_front fails if the process doesn't exist, so we open
+        #    first, then bring to front (ignore errors).
+        if step == 0:
+            log("opening RustDesk (first step)")
+            open_rustdesk()
         bring_to_front("RustDesk")
         shot = screenshot()
 
