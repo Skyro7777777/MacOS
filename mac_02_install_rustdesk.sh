@@ -121,7 +121,11 @@ EOF
 install_launch_daemon() {
   local label="com.carriez.RustDesk_service"
   local plist="/Library/LaunchDaemons/${label}.plist"
-  cat > "$plist" <<EOF
+  # CRITICAL: use `sudo tee` NOT `cat >` — the redirection in `cat > $plist`
+  # opens the file in the CURRENT shell context (runner user), which can't
+  # write to /Library/LaunchDaemons/ (root-owned).  `sudo tee` opens the file
+  # under root's authority instead.
+  sudo tee "$plist" >/dev/null <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -148,6 +152,8 @@ install_launch_daemon() {
 </dict>
 </plist>
 EOF
+  sudo chown root:wheel "$plist"
+  sudo chmod 644 "$plist"
   ok "LaunchDaemon installed at $plist (root, --service)"
 }
 
