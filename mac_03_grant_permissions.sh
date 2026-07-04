@@ -1,202 +1,389 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  mac_03_grant_permissions.sh
-#  Grant TCC permissions to RustDesk using RustDesk's OWN "Configure" button.
+#  Grant TCC permissions to RustDesk using RUSTDESK'S OWN "Configure" button.
 #
-#  THE APPROACH (from analyzing a YouTube tutorial + screenshots):
-#  Instead of fighting with System Settings panes directly, we click the
-#  "Configure" button inside RustDesk's pink "Permissions" section.  This:
-#    1. Adds RustDesk to the relevant privacy list automatically
-#    2. Opens System Settings to the right pane
-#    3. We click the toggle → macOS shows a PASSWORD PROMPT
-#    4. We type the MAC_USER_PASSWORD (from repo secrets)
-#    5. Click "Modify Settings" → macOS grants the permission at the OS level
-#    6. A "Quit & Reopen" dialog appears → we click "Later" (keep RustDesk running)
-#    7. Repeat for each permission RustDesk requests
+#  THE APPROACH:
+#  Drive the ENTIRE flow via osascript (AppleScript + System Events), which
+#  accesses the Accessibility (AX) tree DIRECTLY — NO SCREENSHOTS NEEDED.
+#  This completely avoids the Sequoia "bypass window picker" dialog that
+#  blocks every screencapture call.
 #
-#  WHY THIS IS BETTER than the old 3-layer / ShowUI approach:
-#    - No AI model needed (no torch, no 4 GB downloads, no OOM)
-#    - No TCC.db fighting (the password prompt does the real grant)
-#    - No osascript AX-tree guessing (the "Configure" button is found by OCR)
-#    - Deterministic: same button sequence every time
-#    - Fast: ~30s per permission instead of 5-8 min
+#  Flow (from the YouTube tutorial screenshots):
+#    1. Bring RustDesk to focus
+#    2. Find + click the "Configure" button in RustDesk's pink Permissions section
+#       → RustDesk adds itself to the privacy list + opens System Settings
+#    3. In System Settings, find + click the toggle next to "RustDesk"
+#       → macOS shows a password prompt
+#    4. Type the MAC_USER_PASSWORD (from repo secrets)
+#    5. Click "Modify Settings" (or press Return)
+#       → macOS grants the permission at the OS level
+#    6. "Quit & Reopen" dialog → click "Later" (keep RustDesk running)
+#    7. Repeat for each permission (Screen Recording, Accessibility, Input Monitoring)
 #
-#  TOOLS:
-#    - screencapture  (inherits bash's Screen Recording TCC)
-#    - cliclick       (inherits bash's Accessibility TCC)
-#    - Apple Vision OCR via PyObjC (macOS built-in, zero download)
-#    - mac_ocr_helper.py (find + click buttons by text)
+#  WHY osascript INSTEAD of OCR/screenshots:
+#    - screencapture triggers the Sequoia "bypass window picker" dialog (blocks everything)
+#    - preauthorization via ScreenCaptureApprovals.plist doesn't reliably work
+#    - OCR is fragile (finds wrong text, clicks wrong things)
+#    - osascript accesses the AX tree directly — NO screenshots, NO dialogs
+#    - bash + osascript already have Accessibility + AppleEvents on the runner
 # =============================================================================
 set -euo pipefail
 source "$(dirname "$0")/mac_lib.sh"
 
-log "Step 03 — grant TCC permissions via RustDesk's Configure button flow"
+log "Step 03 — grant TCC permissions via osascript AX-tree (no screenshots)"
 
 require_env MAC_USER_PASSWORD
 
-# --- 0. start screenshot + dialog-dismissal loops ---------------------------
+# --- 0. start screenshot + dialog-dismissal loops (for debugging artifacts) -
+# The screenshot loop may trigger the bash dialog, but the dialog-dismissal
+# loop will auto-click "Allow*" so screenshots still work for the artifact.
 start_screenshot_loop
 start_dialog_dismissal_loop
 
-# --- 1. set up the Python venv with PyObjC for OCR --------------------------
-VENV_DIR="$STATE_DIR/ocr-venv"
-if [ ! -x "$VENV_DIR/bin/python" ]; then
-  log "creating lightweight OCR venv (pyobjc + pillow only — no torch, no AI)"
-  python3 -m venv "$VENV_DIR"
-  "$VENV_DIR/bin/python" -m pip install --quiet --upgrade pip 2>&1 | tail -n1
-  "$VENV_DIR/bin/python" -m pip install --quiet \
-      pyobjc-framework-Vision pyobjc-framework-Quartz pillow 2>&1 | tail -n2
-fi
-ok "OCR venv ready"
-
-# --- 2. install cliclick if missing -----------------------------------------
+# --- 1. install cliclick (for password typing fallback) ---------------------
 if ! command -v cliclick >/dev/null 2>&1; then
   log "installing cliclick"
   brew install cliclick
 fi
 
-OCR="$VENV_DIR/bin/python $PROJECT_ROOT/mac_ocr_helper.py"
-
-# --- 3. helper: click a button by text, with retry --------------------------
-click_button() {
-  local text="$1" retries="${2:-10}"
-  for i in $(seq 1 "$retries"); do
-    if $OCR click "$text" 2>/dev/null; then
-      ok "clicked '$text'"
-      return 0
-    fi
-    sleep 1
-  done
-  warn "could not find/click '$text' after $retries tries"
-  return 1
-}
-
-# --- 4. helper: type the password from secrets ------------------------------
-type_password() {
-  log "typing password from MAC_USER_PASSWORD secret"
-  $OCR type "$MAC_USER_PASSWORD"
-  sleep 0.5
-  # press Return to submit (or click Modify Settings)
-  osascript -e 'tell application "System Events" to keystroke return' 2>/dev/null || true
+# --- 2. helper: bring RustDesk to front -------------------------------------
+focus_rustdesk() {
+  log "bringing RustDesk to front"
+  osascript -e '
+    tell application "System Events"
+      set frontmost of (first process whose name is "RustDesk") to true
+    end tell
+  ' 2>/dev/null || gui_run open -a RustDesk || true
   sleep 1
 }
 
-# --- 5. helper: handle one full permission cycle ----------------------------
-# This handles the complete flow for ONE "Configure" button click:
-#   Configure → System Settings opens → click toggle → password prompt →
-#   type password → Modify Settings → Quit & Reopen → Later
+# --- 3. helper: click a button in a given app by its AX name ----------------
+# Usage: ax_click_button "RustDesk" "Configure"
+#        ax_click_button "System Settings" "Later"
+ax_click_button() {
+  local app_name="$1" button_name="$2"
+  log "  AX: looking for '$button_name' in '$app_name'"
+  local result
+  result="$(osascript <<APPLESCRIPT 2>&1
+on run
+  tell application "System Events"
+    -- find the process
+    set procList to (every process whose name is "$app_name")
+    if (count of procList) is 0 then
+      return "NO_PROCESS"
+    end if
+    set theProc to item 1 of procList
+    if not (frontmost of theProc) then
+      set frontmost of theProc to true
+      delay 0.5
+    end if
+    -- search ALL windows for a button named "$button_name"
+    repeat with w in (windows of theProc)
+      try
+        -- try direct buttons first
+        repeat with b in (every button of w)
+          try
+            if (name of b as text) is "$button_name" then
+              click b
+              return "CLICKED"
+            end if
+          end try
+        end repeat
+        -- recursively search groups for buttons
+        set foundBtn to my findButtonInGroup(w, "$button_name")
+        if foundBtn is not missing value then
+          click foundBtn
+          return "CLICKED"
+        end if
+      end try
+    end repeat
+    return "NOT_FOUND"
+  end tell
+end run
+
+on findButtonInGroup(theElem, btnName)
+  tell application "System Events"
+    set kids to {}
+    try
+      set kids to UI elements of theElem
+    end try
+    -- check direct buttons
+    repeat with kid in kids
+      try
+        set kidRole to role of kid
+        if kidRole is "AXButton" or kidRole is "AXCheckBox" or kidRole is "AXSwitch" then
+          try
+            if (name of kid as text) is btnName then
+              return kid
+            end if
+          end try
+        end if
+      end try
+    end repeat
+    -- recurse into groups
+    repeat with kid in kids
+      try
+        set kidRole to role of kid
+        if kidRole is "AXGroup" or kidRole is "AXSplitGroup" or kidRole is "AXLayoutArea" then
+          set res to my findButtonInGroup(kid, btnName)
+          if res is not missing value then return res
+        end if
+      end try
+    end repeat
+    return missing value
+  end tell
+end findButtonInGroup
+APPLESCRIPT
+)"
+  case "$result" in
+    CLICKED) ok "  AX: clicked '$button_name' in '$app_name'"; return 0 ;;
+    NO_PROCESS) warn "  AX: process '$app_name' not found"; return 1 ;;
+    NOT_FOUND) warn "  AX: '$button_name' not found in '$app_name'"; return 1 ;;
+    *) warn "  AX: error: $result"; return 1 ;;
+  esac
+}
+
+# --- 4. helper: click the toggle next to "RustDesk" in System Settings ------
+# The toggle is an AXSwitch whose parent row also contains "RustDesk" text.
+ax_click_toggle_for_rustdesk() {
+  log "  AX: looking for RustDesk's toggle in System Settings"
+  local result
+  result="$(osascript <<'APPLESCRIPT' 2>&1
+on run
+  tell application "System Events"
+    set procList to (every process whose name is "System Settings")
+    if (count of procList) is 0 then return "NO_PROCESS"
+    set theProc to item 1 of procList
+    if (count of windows of theProc) is 0 then return "NO_WINDOW"
+    set theWindow to window 1 of theProc
+    -- recursively search for a switch whose row contains "RustDesk"
+    set theSwitch to my findSwitchForApp(theWindow, "RustDesk")
+    if theSwitch is missing value then return "NOT_FOUND"
+    -- check if already ON
+    try
+      set switchVal to value of theSwitch
+      if switchVal is 1 then return "ALREADY_ON"
+    end try
+    -- click it ON
+    try
+      set value of theSwitch to 1
+    on error
+      click theSwitch
+    end try
+    return "CLICKED"
+  end tell
+end run
+
+on findSwitchForApp(theElement, appName)
+  tell application "System Events"
+    set elemRole to missing value
+    try
+      set elemRole to role of theElement
+    end try
+    set kids to {}
+    try
+      set kids to UI elements of theElement
+    end try
+    -- if this is a group/row that has BOTH a switch and matching text
+    if elemRole is in {"AXGroup", "AXRow", "AXOutlineRow", "AXLayoutArea", "AXSplitGroup"} then
+      set foundSwitch to missing value
+      set foundText to false
+      repeat with kid in kids
+        try
+          set kidRole to role of kid
+          if kidRole is in {"AXSwitch", "AXCheckBox", "AXCheckbox"} then
+            set foundSwitch to kid
+          else if kidRole is "AXStaticText" or kidRole is "AXTextField" then
+            try
+              if (value of kid as text) contains appName then
+                set foundText to true
+              end if
+            end try
+          end if
+        end try
+      end repeat
+      if foundSwitch is not missing value and foundText then
+        return foundSwitch
+      end if
+    end if
+    -- recurse
+    repeat with kid in kids
+      try
+        set res to my findSwitchForApp(kid, appName)
+        if res is not missing value then return res
+      end try
+    end repeat
+    return missing value
+  end tell
+end findSwitchForApp
+APPLESCRIPT
+)"
+  case "$result" in
+    CLICKED) ok "  AX: clicked RustDesk's toggle"; return 0 ;;
+    ALREADY_ON) ok "  AX: RustDesk's toggle is already ON"; return 0 ;;
+    NO_PROCESS) warn "  AX: System Settings not running"; return 1 ;;
+    NO_WINDOW) warn "  AX: System Settings has no window"; return 1 ;;
+    NOT_FOUND) warn "  AX: RustDesk toggle not found in the AX tree"; return 1 ;;
+    *) warn "  AX: error: $result"; return 1 ;;
+  esac
+}
+
+# --- 5. helper: handle the password prompt ----------------------------------
+# After clicking the toggle, macOS shows "Privacy & Security is trying to
+# modify your system settings. Enter your password to allow this."
+# We find the password text field, type the password, and submit.
+handle_password_prompt() {
+  log "  AX: looking for password prompt"
+  local result
+  result="$(osascript <<APPLESCRIPT 2>&1
+on run
+  tell application "System Events"
+    -- the password prompt can belong to "SecurityAgent" or "CoreServicesUIAgent"
+    repeat with procName in {"SecurityAgent", "CoreServicesUIAgent"}
+      set procList to (every process whose name is procName)
+      if (count of procList) > 0 then
+        set theProc to item 1 of procList
+        repeat with w in (windows of theProc)
+          try
+            -- find the password text field (AXSecureTextField)
+            set pwField to missing value
+            repeat with ui in (UI elements of w)
+              try
+                if (role of ui) is "AXSecureTextField" then
+                  set pwField to ui
+                  exit repeat
+                end if
+              end try
+            end repeat
+            if pwField is not missing value then
+              -- type the password
+              set focused of pwField to true
+              keystroke "$MAC_USER_PASSWORD"
+              delay 0.5
+              -- press Return or click "Modify Settings" / "OK"
+              keystroke return
+              return "TYPED"
+            end if
+          end try
+        end repeat
+      end if
+    end repeat
+    return "NO_PROMPT"
+  end tell
+end run
+APPLESCRIPT
+)"
+  case "$result" in
+    TYPED) ok "  AX: typed password + pressed Return"; return 0 ;;
+    NO_PROMPT) warn "  AX: no password prompt found (toggle may have been already ON)"; return 0 ;;
+    *) warn "  AX: password error: $result"; return 1 ;;
+  esac
+}
+
+# --- 6. the full permission cycle -------------------------------------------
 grant_one_permission() {
   local attempt="$1"
   log "=== permission cycle #$attempt ==="
+  take_screenshot "03_cycle${attempt}_start"
 
-  # 5a. make sure RustDesk is open + in focus
-  gui_run open -a RustDesk 2>/dev/null || true
-  sleep 2
+  # 6a. focus RustDesk
+  focus_rustdesk
+  sleep 1
 
-  # 5b. look for a "Configure" button in RustDesk's pink Permissions section
-  take_screenshot "03_cycle${attempt}_looking_for_configure"
-  if ! $OCR find "Configure" 2>/dev/null | grep -q "^[0-9]"; then
-    log "no 'Configure' button found — all permissions may be granted already"
-    return 0  # no more Configure buttons = all done
-  fi
+  # 6b. look for the "Configure" button in RustDesk
+  if ax_click_button "RustDesk" "Configure"; then
+    log "  clicked Configure — waiting for System Settings to open..."
+    sleep 4
+    take_screenshot "03_cycle${attempt}_after_configure"
 
-  # 5c. click the Configure button
-  log "clicking 'Configure' button in RustDesk"
-  click_button "Configure" 5 || return 1
-  sleep 3  # wait for System Settings to open
-  take_screenshot "03_cycle${attempt}_after_configure_click"
+    # 6c. wait for System Settings to have a window
+    for i in $(seq 1 10); do
+      if osascript -e 'tell application "System Events" to return (count of windows of (first process whose name is "System Settings"))' 2>/dev/null | grep -q "[1-9]"; then
+        ok "  System Settings window is open"
+        break
+      fi
+      sleep 1
+    done
 
-  # 5d. wait for the toggle to appear in System Settings (RustDesk should be in the list)
-  log "waiting for RustDesk to appear in the privacy list..."
-  local toggle_found=false
-  for i in $(seq 1 15); do
-    if $OCR find "RustDesk" 2>/dev/null | grep -q "^[0-9]"; then
-      toggle_found=true
-      break
-    fi
+    # 6d. click the toggle next to RustDesk
     sleep 1
-  done
-  if [ "$toggle_found" = "false" ]; then
-    warn "RustDesk not found in the privacy list after 15s"
-    take_screenshot "03_cycle${attempt}_rustdesk_not_in_list"
-    return 1
-  fi
-  ok "RustDesk is in the list"
+    ax_click_toggle_for_rustdesk || true
+    take_screenshot "03_cycle${attempt}_after_toggle"
+    sleep 2
 
-  # 5e. click the toggle (120px right of the "RustDesk" label)
-  log "clicking the toggle next to RustDesk"
-  $OCR click_toggle "RustDesk" 2>/dev/null || true
-  sleep 2
-  take_screenshot "03_cycle${attempt}_after_toggle_click"
-
-  # 5f. handle the password prompt ("Enter your password to allow this")
-  log "waiting for password prompt..."
-  local pw_prompt_found=false
-  for i in $(seq 1 10); do
-    if $OCR find "password" 2>/dev/null | grep -q "^[0-9]"; then
-      pw_prompt_found=true
-      break
-    fi
-    # the password prompt might already be gone if the toggle was already ON
-    if $OCR find "Quit" 2>/dev/null | grep -q "^[0-9]"; then
-      log "no password prompt — toggle was already ON, jumping to Quit & Reopen"
-      break
-    fi
-    sleep 1
-  done
-
-  if [ "$pw_prompt_found" = "true" ]; then
-    log "password prompt found — typing password"
-    type_password
+    # 6e. handle the password prompt
+    handle_password_prompt
     sleep 2
     take_screenshot "03_cycle${attempt}_after_password"
 
-    # click "Modify Settings" if it appears (sometimes Return is enough)
-    $OCR click "Modify Settings" 2>/dev/null || true
-    sleep 2
-  fi
-
-  # 5g. handle the "Quit & Reopen" dialog → click "Later" to keep RustDesk running
-  log "looking for 'Quit & Reopen' or 'Later' dialog..."
-  for i in $(seq 1 10); do
-    if $OCR find "Later" 2>/dev/null | grep -q "^[0-9]"; then
-      log "clicking 'Later' to keep RustDesk running"
-      $OCR click "Later" 2>/dev/null || true
-      sleep 1
-      break
-    fi
+    # 6f. handle "Quit & Reopen" → click "Later"
+    # The dialog can belong to System Settings or a separate process
+    ax_click_button "System Settings" "Later" 2>/dev/null || true
     sleep 1
-  done
-
-  take_screenshot "03_cycle${attempt}_done"
-  ok "permission cycle #$attempt complete"
-  return 0
+    # also try SecurityAgent / CoreServicesUIAgent for the Later button
+    ax_click_button "SecurityAgent" "Later" 2>/dev/null || true
+    ax_click_button "CoreServicesUIAgent" "Later" 2>/dev/null || true
+    take_screenshot "03_cycle${attempt}_done"
+    ok "  permission cycle #$attempt complete"
+    return 0
+  else
+    # no Configure button = either all permissions granted, or RustDesk isn't showing it
+    log "  no 'Configure' button found — may be all permissions granted"
+    return 1
+  fi
 }
 
-# --- 6. run the permission cycles -------------------------------------------
-# RustDesk shows one "Configure" button at a time for each missing permission
-# (Screen Recording, then Accessibility, then Input Monitoring).  We loop up
-# to 6 times to cover all three + retries.
+# --- 7. run the permission cycles -------------------------------------------
 MAX_CYCLES=6
 for cycle in $(seq 1 "$MAX_CYCLES"); do
   grant_one_permission "$cycle" || true
+  sleep 2
 
   # check if any "Configure" button remains
-  sleep 2
-  if ! $OCR find "Configure" 2>/dev/null | grep -q "^[0-9]"; then
+  if ! osascript -e '
+    tell application "System Events"
+      try
+        set theProc to first process whose name is "RustDesk"
+        repeat with w in (windows of theProc)
+          repeat with b in (every button of w)
+            try
+              if (name of b as text) is "Configure" then return "FOUND"
+            end try
+          end repeat
+        end repeat
+      end try
+      return "NONE"
+    end tell
+  ' 2>/dev/null | grep -q "FOUND"; then
     ok "no more 'Configure' buttons — all permissions granted"
     break
   fi
 done
 
-# --- 7. final verification --------------------------------------------------
+# --- 8. final state ---------------------------------------------------------
 take_screenshot "03_final_state"
 log "=== permission grant summary ==="
 
-# Check if RustDesk still shows a pink Permissions section
-if $OCR find "Configure" 2>/dev/null | grep -q "^[0-9]"; then
+# Check if RustDesk still shows a "Configure" button
+configure_check="$(osascript -e '
+  tell application "System Events"
+    try
+      set theProc to first process whose name is "RustDesk"
+      repeat with w in (windows of theProc)
+        repeat with b in (every button of w)
+          try
+            if (name of b as text) is "Configure" then return "STILL_HAS_CONFIGURE"
+          end try
+        end repeat
+      end repeat
+    end try
+    return "NO_CONFIGURE"
+  end tell
+' 2>/dev/null)"
+
+if [ "$configure_check" = "STILL_HAS_CONFIGURE" ]; then
   warn "RustDesk still shows a 'Configure' button — some permissions may be missing"
-  warn "check the screenshots artifact for the final desktop state"
 else
   ok "no 'Configure' button remaining — all permissions appear granted"
 fi
