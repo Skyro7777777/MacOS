@@ -97,10 +97,26 @@ def open_rustdesk() -> None:
 
 
 def bring_to_front(app_name: str) -> None:
-    subprocess.run(["osascript", "-e",
-                    f'tell application "System Events" to set frontmost of (first process whose name is "{app_name}") to true'],
-                   check=False)
+    """Bring an app to front. Non-fatal — prints a warning if the app
+    isn't running (we may still be able to proceed via screenshots)."""
+    result = subprocess.run(
+        ["osascript", "-e",
+         f'tell application "System Events" to set frontmost of (first process whose name is "{app_name}") to true'],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        log(f"  (bring_to_front '{app_name}' skipped: {result.stderr.strip()[:80]})")
     time.sleep(0.5)
+
+
+def is_process_running(app_name: str) -> bool:
+    """Check if a process is running."""
+    result = subprocess.run(
+        ["osascript", "-e",
+         f'tell application "System Events" to return (count of (every process whose name is "{app_name}")) > 0'],
+        capture_output=True, text=True
+    )
+    return result.returncode == 0 and "true" in result.stdout.lower()
 
 
 # ============================================================================
@@ -206,11 +222,10 @@ def grant_permissions() -> bool:
         log(f"=== step {step + 1}/{MAX_STEPS} ===")
 
         # 1. make sure RustDesk is open + in front.
-        #    On the first step RustDesk may not be running yet — open it.
-        #    bring_to_front fails if the process doesn't exist, so we open
-        #    first, then bring to front (ignore errors).
-        if step == 0:
-            log("opening RustDesk (first step)")
+        #    RustDesk may have been quit by a "Quit & Reopen" click in a
+        #    previous step, so check if it's running and reopen if not.
+        if not is_process_running("RustDesk"):
+            log("RustDesk not running — opening it")
             open_rustdesk()
         bring_to_front("RustDesk")
         shot = screenshot()
@@ -235,7 +250,12 @@ def grant_permissions() -> bool:
         click_at(*configure_pt)
         time.sleep(4)  # wait for System Settings to open
 
-        # 4. System Settings should now be open with RustDesk in the list
+        # 4. System Settings should now be open with RustDesk in the list.
+        #    Wait for it to appear (bring_to_front is non-fatal if not yet running).
+        for _ in range(10):
+            if is_process_running("System Settings"):
+                break
+            time.sleep(1)
         bring_to_front("System Settings")
         time.sleep(1)
         shot2 = screenshot()
