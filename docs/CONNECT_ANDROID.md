@@ -81,10 +81,12 @@ From the Mac desktop (via RustDesk), open Terminal and run:
 touch /tmp/apple-project/remote-done
 ```
 
-Or, if you have Termux + an SSH client on Android:
+Or, if you have Termux + an SSH client on Android (macOS Remote Login is
+enabled by the workflow in step 04):
 ```bash
 ssh cihelper@100.96.123.45 "touch /tmp/apple-project/remote-done"
 ```
+(Password is the `MAC_USER_PASSWORD` secret.)
 
 The hold script exits the job within ~1 s. (If you forget, the job ends
 automatically at `hold_minutes`.)

@@ -68,11 +68,11 @@ So the client never tries RustDesk's public rendezvous/relay servers:
 
 Once connected, RustDesk supports drag-and-drop file transfer **Windows → Mac**
 on recent versions. For **Mac → Windows**, use the RustDesk **File transfer**
-mode (click the folder icon in the RustDesk toolbar), or just `scp` over
-Tailscale SSH:
+mode (click the folder icon in the RustDesk toolbar), or `scp` over SSH
+(the workflow enables macOS Remote Login on the Tailscale IP):
 
 ```powershell
-# from Windows PowerShell (Tailscale SSH is enabled by the workflow)
+# from Windows PowerShell (macOS Remote Login is enabled by the workflow)
 scp cihelper@100.96.123.45:/Users/runner/some-file.txt .
 ```
 
@@ -90,10 +90,12 @@ Open Terminal on the Mac (via RustDesk) and run:
 touch /tmp/apple-project/remote-done
 ```
 
-**Option B — from Windows via Tailscale SSH:**
+**Option B — from Windows via SSH over Tailscale:**
 ```powershell
 ssh cihelper@100.96.123.45 "touch /tmp/apple-project/remote-done"
 ```
+(Password is the `MAC_USER_PASSWORD` secret. macOS Remote Login is enabled
+by the workflow in step 04.)
 
 The hold script polls for that file every second and exits the job within ~1 s
 of it appearing. (If you forget, the job ends automatically at `hold_minutes`.)

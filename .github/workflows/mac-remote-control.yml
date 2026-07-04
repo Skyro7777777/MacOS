@@ -81,7 +81,12 @@ jobs:
       - name: Always — tear down Tailscale node
         if: always()
         run: |
+          # Order matters: logout FIRST (while daemon is alive to reach the
+          # socket), then stop the brew service.
           if command -v tailscale >/dev/null 2>&1; then
             sudo tailscale logout 2>/dev/null || true
             sudo tailscale down 2>/dev/null || true
+          fi
+          if command -v brew >/dev/null 2>&1; then
+            sudo brew services stop tailscale 2>/dev/null || true
           fi

@@ -10,6 +10,14 @@ source "$(dirname "$0")/mac_lib.sh"
 
 log "Step 04 — launch RustDesk in GUI session + verify port $RUSTDESK_PORT"
 
+# --- 0. enable macOS Remote Login (SSH) so the operator can ssh in over the
+#     Tailscale IP to touch the done-flag file without using the RustDesk GUI.
+#     (Tailscale's own --ssh doesn't work with the brew CLI build — see
+#     mac_01_install_tailscale.sh — so we enable the built-in macOS sshd instead.)
+log "enabling Remote Login (sshd) for done-flag SSH fallback"
+sudo systemsetup -setremotelogin on 2>/dev/null || true
+sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || true
+
 # --- 1. make sure nothing stale is running ----------------------------------
 pkill -x RustDesk 2>/dev/null || true
 sleep 1
@@ -91,11 +99,11 @@ cat > "$STATE_DIR/connection-info.txt" <<EOF
   │                                                                     │
   │  WHEN DONE:  create the done-flag file to end the workflow:         │
   │        touch $DONE_FLAG                                             │
-  │     (easiest: open Terminal on the Mac via RustDesk and run it,     │
-  │      or use Tailscale SSH:  ssh $MAC_USER@$TS_HOST)                 │
+  │     (open Terminal on the Mac via the RustDesk session and run it,  │
+  │      or enable Remote Login below and ssh cihelper@$TS_IP)          │
   └──────────────────────────────────────────────────────────────────────┘
 
-  Helper user (for SSH / password prompts): $MAC_USER
+  Helper user (for password prompts): $MAC_USER
   (passwordless sudo is enabled for $MAC_USER)
 
 ==============================================================================
