@@ -1,0 +1,13 @@
+# Python dependencies for mac_showui_agent.py (ShowUI-2B local AI fallback)
+# Install with:  python3 -m pip install -r mac_requirements.txt
+#
+# torch / torchvision are installed separately (platform-specific wheels).
+# On the GitHub macos-15 (Apple Silicon) runner:
+#     python3 -m pip install torch torchvision
+# (MPS is available out of the box on arm64 macOS.)
+
+transformers>=4.47.0
+qwen-vl-utils>=0.0.8
+accelerate>=0.34.0
+pillow>=10.0.0
+huggingface_hub>=0.25.0

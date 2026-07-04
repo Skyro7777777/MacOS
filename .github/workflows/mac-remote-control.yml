@@ -1,0 +1,87 @@
+# =============================================================================
+#  The_Apple_Project — macOS 15 GitHub Actions runner, GUI remote control
+#  Method:  Tailscale (transport)  +  RustDesk direct-IP (no relay)  +
+#           layered permission grant (sqlite3 -> osascript -> ShowUI-2B)
+# =============================================================================
+#
+#  Required GitHub repo Secrets  (Settings -> Secrets and variables -> Actions):
+#    TS_AUTHKEY            Tailscale auth key  (reusable + ephemeral + tagged)
+#                          generate at https://login.tailscale.com/admin/settings/keys
+#    RUSTDESK_PASSWORD     The password the client types into RustDesk to connect
+#    MAC_USER_PASSWORD     Password for the freshly-created helper admin user
+#
+#  Optional Secrets:
+#    MAC_USER              Helper username (default: cihelper)
+#
+#  Trigger:  Actions tab -> "macOS 15 Remote Control" -> Run workflow
+#            then watch the job log for the printed connection info block.
+# =============================================================================
+
+name: macOS 15 Remote Control (Tailscale + RustDesk)
+
+on:
+  workflow_dispatch:
+    inputs:
+      hold_minutes:
+        description: "Minutes to keep the runner alive for remote control (max 240)"
+        required: true
+        default: "120"
+      use_showui:
+        description: "Force the ShowUI-2B AI path even if osascript succeeds (true/false)"
+        required: false
+        default: "false"
+
+# Cancel is intentionally NOT enabled — a running session is a real desktop
+# someone may be driving.  Only the timeout-minutes cap protects against orphans.
+concurrency:
+  group: mac-remote-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mac-remote:
+    runs-on: macos-15
+    timeout-minutes: ${{ fromJSON(github.event.inputs.hold_minutes || '120') }}
+    env:
+      # Secrets
+      TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+      RUSTDESK_PASSWORD: ${{ secrets.RUSTDESK_PASSWORD }}
+      MAC_USER: ${{ secrets.MAC_USER }}
+      MAC_USER_PASSWORD: ${{ secrets.MAC_USER_PASSWORD }}
+      # Inputs
+      USE_SHOWUI: ${{ github.event.inputs.use_showui || 'false' }}
+      HOLD_MINUTES: ${{ github.event.inputs.hold_minutes || '120' }}
+      # Make everything non-interactive
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PIP_NO_INPUT: "1"
+
+    steps:
+      - name: Checkout repo (so the workflow can call the root-level scripts)
+        uses: actions/checkout@v4
+
+      - name: 00 — Create helper admin user (known password)
+        run: bash mac_00_setup_user.sh
+
+      - name: 01 — Install & connect Tailscale (.pkg, no relay needed afterwards)
+        run: bash mac_01_install_tailscale.sh
+
+      - name: 02 — Install & configure RustDesk (direct-server mode, NO relay)
+        run: bash mac_02_install_rustdesk.sh
+
+      - name: 03 — Grant Screen Recording / Accessibility / Input Monitoring
+        run: bash mac_03_grant_permissions.sh
+
+      - name: 04 — Launch RustDesk in the GUI session & verify port 21118
+        run: bash mac_04_start_rustdesk.sh
+
+      - name: 05 — Hold session open & print connection info
+        run: bash mac_05_hold_session.sh
+
+      - name: Always — tear down Tailscale node
+        if: always()
+        run: |
+          if command -v tailscale >/dev/null 2>&1; then
+            sudo tailscale logout 2>/dev/null || true
+            sudo tailscale down 2>/dev/null || true
+          fi
