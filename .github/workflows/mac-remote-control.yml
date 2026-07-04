@@ -26,10 +26,6 @@ on:
         description: "Minutes to keep the runner alive for remote control (max 240)"
         required: true
         default: "120"
-      use_showui:
-        description: "Force the ShowUI-2B AI path even if osascript succeeds (true/false)"
-        required: false
-        default: "false"
 
 # Cancel is intentionally NOT enabled — a running session is a real desktop
 # someone may be driving.  Only the timeout-minutes cap protects against orphans.
@@ -48,7 +44,6 @@ jobs:
       MAC_USER: ${{ secrets.MAC_USER }}
       MAC_USER_PASSWORD: ${{ secrets.MAC_USER_PASSWORD }}
       # Inputs
-      USE_SHOWUI: ${{ github.event.inputs.use_showui || 'false' }}
       HOLD_MINUTES: ${{ github.event.inputs.hold_minutes || '120' }}
       # Make everything non-interactive
       HOMEBREW_NO_AUTO_UPDATE: "1"
