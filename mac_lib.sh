@@ -162,6 +162,85 @@ stop_screenshot_loop() {
   fi
 }
 
+# --- Sequoia ScreenCapture pre-authorization (THE GOLD FIX) ------------------
+# macOS 15 (Sequoia) shows a blocking dialog the first time a process tries to
+# capture the screen:
+#   "[app] is requesting to bypass the system private window picker and
+#    directly access your screen and audio."
+#   [Allow For One Month]  [Open System Settings]
+#
+# This dialog is owned by /usr/libexec/replayd and blocks EVERYTHING — including
+# our ShowUI-2B AI agent which needs screencapture to see the screen.
+#
+# The fix: pre-authorize the capturing binaries by writing them into
+#   ~/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist
+# with far-future date values, then SIGHUP replayd so it re-reads the plist.
+# After this, screencapture works WITHOUT any dialog.
+#
+# We authorize: /bin/bash (our shell), /usr/bin/screencapture (the CLI),
+# and the RustDesk binary (so it can capture too).
+
+preauthorize_screencapture() {
+  local sca_dir="$HOME/Library/Group Containers/group.com.apple.replayd"
+  local sca_plist="$sca_dir/ScreenCaptureApprovals.plist"
+  mkdir -p "$sca_dir" 2>/dev/null || true
+
+  log "🔐 pre-authorizing screencapture in ScreenCaptureApprovals.plist"
+
+  # Write the Python script to a temp file (avoids heredoc-in-function issues).
+  local py_script="/tmp/preauth_screencapture.py"
+  cat > "$py_script" <<'PYEOF'
+import plistlib, os, datetime
+
+plist_path = os.path.expanduser("~/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist")
+os.makedirs(os.path.dirname(plist_path), exist_ok=True)
+
+data = {}
+if os.path.exists(plist_path):
+    try:
+        with open(plist_path, "rb") as f:
+            data = plistlib.load(f)
+    except Exception:
+        data = {}
+
+far_future = datetime.datetime(2099, 1, 1, 0, 0, 0, tzinfo=datetime.timezone.utc)
+
+bins_to_authorize = ["/bin/bash", "/usr/bin/screencapture"]
+rustdesk = "/Applications/RustDesk.app/Contents/MacOS/RustDesk"
+if os.path.exists(rustdesk):
+    bins_to_authorize.append(rustdesk)
+
+for b in bins_to_authorize:
+    data[b] = {
+        "kScreenCaptureApprovalLastAlerted": far_future,
+        "kScreenCaptureApprovalLastUsed": far_future,
+    }
+
+with open(plist_path, "wb") as f:
+    plistlib.dump(data, f)
+
+print(f"  authorized {len(bins_to_authorize)} binaries in {plist_path}")
+PYEOF
+
+  # Run the Python script; if it fails, fall back to `defaults write`
+  if ! python3 "$py_script" 2>/dev/null; then
+    warn "  plistlib approach failed — falling back to defaults write"
+    for bin in /bin/bash /usr/bin/screencapture "$RUSTDESK_BIN"; do
+      defaults write "$sca_plist" "$bin" -dict \
+        kScreenCaptureApprovalLastAlerted -date "2099-01-01 00:00:00 +0000" \
+        kScreenCaptureApprovalLastUsed     -date "2099-01-01 00:00:00 +0000" 2>/dev/null || true
+    done
+  fi
+  rm -f "$py_script"
+
+  # SIGHUP replayd so it re-reads the plist
+  sudo killall -HUP replayd 2>/dev/null || true
+  # also flush cfprefsd so the defaults cache is invalidated
+  sudo killall -u "$USER" cfprefsd 2>/dev/null || true
+  sleep 1
+  ok "🔐 screencapture pre-authorized (replayd reloaded)"
+}
+
 # --- Sequoia privacy-dialog auto-dismissal -----------------------------------
 # macOS 15 (Sequoia) added a NEW privacy prompt ON TOP of TCC:
 #   "[app] is requesting to bypass the system private window picker and
@@ -185,60 +264,29 @@ start_dialog_dismissal_loop() {
   fi
   (
     while true; do
-      # Click "Allow" on any privacy/security dialog.
-      # We target buttons named "Allow" in windows that also contain
-      # "bypass" or "screen" or "recording" or "access" text.
+      # Click "Allow*" on any privacy/security dialog.
+      # CRITICAL: the Sequoia "bypass window picker" dialog's button is named
+      # "Allow For One Month" — NOT "Allow".  We match 'starts with "Allow"'
+      # to catch all variants (Allow, Allow For One Month, Allow For One Day, etc.)
+      # We scan ALL processes (not just a few) since the dialog can belong to
+      # CoreServicesUIAgent, SecurityAgent, UserNotificationCenter, loginwindow,
+      # or even the capturing app itself.
       osascript -e '
         try
           tell application "System Events"
-            repeat with p in (every process whose name is "CoreServicesUIAgent" or name is "SecurityAgent" or name is "System Settings")
+            repeat with p in (every process whose background only is false)
               repeat with w in (windows of p)
                 try
-                  set wTitle to ""
-                  try
-                    set wTitle to title of w
-                  end try
-                  -- check if this window is a privacy prompt
-                  set isPrivacy to false
-                  try
-                    if wTitle contains "bypass" or wTitle contains "screen" or wTitle contains "recording" or wTitle contains "access" or wTitle contains "requesting" then
-                      set isPrivacy to true
-                    end if
-                  end try
-                  -- also check the window name (some dialogs have no title)
-                  try
-                    set wName to name of w
-                    if wName contains "bypass" or wName contains "screen" or wName contains "recording" or wName contains "access" or wName contains "requesting" then
-                      set isPrivacy to true
-                    end if
-                  end try
-                  -- broad fallback: any window with an "Allow" button
-                  if not isPrivacy then
+                  -- find any button whose name starts with "Allow"
+                  repeat with b in (every button of w)
                     try
-                      set btns to every button of w
-                      repeat with b in btns
-                        try
-                          if (name of b as text) is "Allow" then
-                            set isPrivacy to true
-                            exit repeat
-                          end if
-                        end try
-                      end repeat
+                      set bName to name of b as text
+                      if bName starts with "Allow" then
+                        click b
+                        return "dismissed:" & bName
+                      end if
                     end try
-                  end if
-                  if isPrivacy then
-                    -- find and click the "Allow" button
-                    try
-                      repeat with b in (every button of w)
-                        try
-                          if (name of b as text) is "Allow" then
-                            click b
-                            return "dismissed"
-                          end if
-                        end try
-                      end repeat
-                    end try
-                  end if
+                  end repeat
                 end try
               end repeat
             end repeat
@@ -250,7 +298,7 @@ start_dialog_dismissal_loop() {
   ) &
   DIALOG_DISMISS_PID=$!
   disown 2>/dev/null || true
-  log "🤖 dialog-dismissal loop started (PID=$DIALOG_DISMISS_PID, interval=2s)"
+  log "🤖 dialog-dismissal loop started (PID=$DIALOG_DISMISS_PID, interval=2s, matching 'Allow*')"
 }
 
 stop_dialog_dismissal_loop() {
