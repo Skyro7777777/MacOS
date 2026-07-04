@@ -190,10 +190,14 @@ grant_via_osascript() {
   return 1
 }
 
-# --- LAYER 3: ShowUI-2B local AI agent --------------------------------------
+# --- LAYER 3: GUI agent (3-tier: Apple Vision OCR → OmniParser YOLO → moondream2)
+# This replaces the OOM-prone ShowUI-2B agent.  The new agent (mac_gui_agent.py)
+# uses the macOS BUILT-IN Vision framework for OCR (zero download, ~100 MB RAM)
+# as the primary method, with OmniParser-v2.0's 40 MB YOLO icon detector as
+# fallback #1, and moondream2 (1.86B, ~4 GB RAM) as the true last-resort VLM.
 grant_via_showui() {
   local service="$1" pane_url="$2" goal="$3"
-  log "  [L3 ShowUI-2B] booting local vision agent for: $goal"
+  log "  [L3 GUI agent] booting 3-tier agent (OCR → YOLO → moondream2) for: $goal"
 
   # one-time deps
   if ! command -v cliclick >/dev/null 2>&1; then
@@ -201,42 +205,59 @@ grant_via_showui() {
     brew install cliclick
   fi
 
-  # Use a virtualenv — the macOS runner's system Python is "externally managed"
-  # (PEP 668) so `pip install --user` is BLOCKED.  A venv avoids this entirely
-  # and isolates the heavy deps (torch ~2GB, transformers, etc.).
+  # Use a virtualenv (PEP 668 blocks pip --user on the system Python).
   # The venv is cached across the 3 permission attempts (same job).
-  local venv_dir="$STATE_DIR/showui-venv"
+  local venv_dir="$STATE_DIR/gui-agent-venv"
   if [ ! -x "$venv_dir/bin/python" ]; then
     log "  creating Python virtualenv at $venv_dir"
     python3 -m venv "$venv_dir" || die "could not create venv"
-    # upgrade pip + wheel first (needed for torch wheel resolution)
     "$venv_dir/bin/python" -m pip install --quiet --upgrade pip wheel setuptools 2>&1 | tail -n1
   fi
 
-  # install deps into the venv if torch isn't there yet
-  if ! "$venv_dir/bin/python" -c "import torch" 2>/dev/null; then
-    log "  installing Python deps into venv (transformers, qwen-vl-utils, torch, ...)"
-    # install torch FIRST (it's the biggest + most finicky), then the rest
-    log "    installing torch (this is ~2 GB, may take a minute)..."
-    "$venv_dir/bin/python" -m pip install --quiet torch torchvision 2>&1 | tail -n2
-    log "    installing transformers + qwen-vl-utils + accelerate..."
+  # --- TIER 1 deps (always install — cheap): pyobjc + Pillow ---
+  # pyobjc-framework-Vision gives us VNRecognizeTextRequest (macOS built-in OCR).
+  if ! "$venv_dir/bin/python" -c "import Vision" 2>/dev/null; then
+    log "  installing Tier-1 deps: pyobjc-framework-Vision + Pillow (small, fast)"
     "$venv_dir/bin/python" -m pip install --quiet \
-        "transformers>=4.47.0" qwen-vl-utils accelerate pillow huggingface_hub 2>&1 | tail -n2
+        pyobjc-framework-Vision pyobjc-framework-Quartz pillow 2>&1 | tail -n2
   fi
-  ok "  venv ready: $($venv_dir/bin/python -c 'import torch; print(f"torch {torch.__version__}")')"
+  ok "  Tier 1 (Apple Vision OCR) ready"
 
-  # the model is ~4.2 GB; let it auto-download on first run into the HF cache
-  log "  launching ShowUI-2B agent (model downloads on first run, ~4.2 GB)"
-  SHOWUI_GOAL="$goal" \
-  SHOWUI_PANE_URL="$pane_url" \
-  SHOWUI_SERVICE="$service" \
-  SHOWUI_HELPER_USER="$MAC_USER" \
-  SHOWUI_HELPER_PASSWORD="$(sudo sed -n 's/^MAC_USER_PASSWORD=//p' "$STATE_DIR/helper-user.env" 2>/dev/null)" \
-  "$venv_dir/bin/python" "$PROJECT_ROOT/mac_showui_agent.py" && {
-    ok "  [L3 ShowUI-2B] $service GRANTED"
+  # --- TIER 2 deps (medium): ultralytics + huggingface_hub for OmniParser YOLO ---
+  if ! "$venv_dir/bin/python" -c "import ultralytics" 2>/dev/null; then
+    log "  installing Tier-2 deps: ultralytics + huggingface_hub (for OmniParser YOLO, 40 MB model)"
+    "$venv_dir/bin/python" -m pip install --quiet ultralytics huggingface_hub 2>&1 | tail -n2
+  fi
+  ok "  Tier 2 (OmniParser YOLO) ready"
+
+  # --- TIER 3 deps (heavy, lazy): torch + transformers for moondream2 ---
+  # Only install if the env var GUI_AGENT_SKIP_VLM is not set.  This lets the
+  # operator skip the ~2 GB torch download if Tiers 1+2 are sufficient.
+  if [ "${GUI_AGENT_SKIP_VLM:-false}" != "true" ]; then
+    if ! "$venv_dir/bin/python" -c "import torch" 2>/dev/null; then
+      log "  installing Tier-3 deps: torch + transformers (for moondream2, ~2 GB download)"
+      "$venv_dir/bin/python" -m pip install --quiet torch torchvision 2>&1 | tail -n2
+      "$venv_dir/bin/python" -m pip install --quiet \
+          "transformers>=4.47.0" einops timm 2>&1 | tail -n2
+    fi
+    ok "  Tier 3 (moondream2 VLM) ready"
+  else
+    warn "  Tier 3 (moondream2) skipped (GUI_AGENT_SKIP_VLM=true)"
+  fi
+
+  # launch the agent
+  log "  launching GUI agent"
+  GUI_AGENT_GOAL="$goal" \
+  GUI_AGENT_PANE_URL="$pane_url" \
+  GUI_AGENT_SERVICE="$service" \
+  GUI_AGENT_HELPER_USER="$MAC_USER" \
+  GUI_AGENT_HELPER_PW="$(sudo sed -n 's/^MAC_USER_PASSWORD=//p' "$STATE_DIR/helper-user.env" 2>/dev/null)" \
+  GUI_AGENT_VENV="$venv_dir" \
+  "$venv_dir/bin/python" "$PROJECT_ROOT/mac_gui_agent.py" && {
+    ok "  [L3 GUI agent] $service GRANTED"
     return 0
   }
-  warn "  [L3 ShowUI-2B] could not grant $service"
+  warn "  [L3 GUI agent] could not grant $service"
   return 1
 }
 
