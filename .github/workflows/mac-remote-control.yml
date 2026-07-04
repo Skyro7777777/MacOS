@@ -58,6 +58,11 @@ jobs:
       - name: 00 — Create helper admin user (known password)
         run: bash mac_00_setup_user.sh
 
+      - name: Setup Python 3.12 (for moondream2 — PyTorch doesn't support 3.14)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: 01 — Install & connect Tailscale (.pkg, no relay needed afterwards)
         run: bash mac_01_install_tailscale.sh
 

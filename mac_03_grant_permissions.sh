@@ -15,12 +15,12 @@
 #  6. moondream2 points to "Later" → cliclick clicks it (dismiss "Quit & Reopen")
 #  7. Repeat for each permission
 #
-#  WHY moondream2 (not OCR, not osascript AX, not ShowUI-2B):
-#    - OCR needs screencapture → triggers Sequoia "bypass window picker" dialog
-#      (the dialog blocks the screenshot, OCR finds wrong text)
-#    - osascript AX can't find buttons in RustDesk (Flutter app, poor AX support)
-#    - ShowUI-2B OOMs on the runner's 7.93 GiB MPS limit
-#    - moondream2 (1.86B, ~4 GB RAM) fits comfortably + has native <point> API
+#  CRITICAL VERSION PINS (from deep research, Task ID 30):
+#    - Python 3.12 (NOT 3.14 — PyTorch doesn't fully support 3.14)
+#    - transformers==4.56.1 (pinned — v4.57+/5.0 broke moondream2's
+#      trust_remote_code via _tied_weights_keys → all_tied_weights_keys rename)
+#    - torch>=2.7.0,<2.10
+#    - moondream2 revision 2025-06-21 (has native point() API)
 #
 #  The preauthorization (ScreenCaptureApprovals.plist) + dialog-dismissal loop
 #  handle the bash popup so screencapture works for moondream2.
@@ -42,31 +42,55 @@ if ! command -v cliclick >/dev/null 2>&1; then
   brew install cliclick
 fi
 
-# --- 2. create the venv with ALL deps (torch + transformers + moondream2) ---
+# --- 2. ensure Python 3.12 is available -------------------------------------
+# The runner's default python3 is 3.14 (too new for PyTorch). We need 3.12.
+# Check if 3.12 is available (either as python3.12 or via setup-python).
+PY312=""
+if command -v python3.12 >/dev/null 2>&1; then
+  PY312="$(command -v python3.12)"
+elif [ -x "/Users/runner/hostedtoolcache/Python/3.12.10/arm64/bin/python3.12" ]; then
+  PY312="/Users/runner/hostedtoolcache/Python/3.12.10/arm64/bin/python3.12"
+elif /usr/bin/python3 -c "import sys; exit(0 if sys.version_info[:2] == (3,12) else 1)" 2>/dev/null; then
+  PY312="/usr/bin/python3"
+fi
+
+if [ -z "$PY312" ]; then
+  log "Python 3.12 not found — installing via Homebrew"
+  brew install python@3.12
+  PY312="$(command -v python3.12 2>/dev/null || echo /opt/homebrew/bin/python3.12)"
+fi
+ok "using Python: $PY312 ($($PY312 --version 2>&1))"
+
+# --- 3. create the venv with Python 3.12 + ALL deps -------------------------
 VENV_DIR="$STATE_DIR/moondream-venv"
 if [ ! -x "$VENV_DIR/bin/python" ]; then
-  log "creating Python virtualenv at $VENV_DIR"
-  python3 -m venv "$VENV_DIR" || die "could not create venv"
+  log "creating Python 3.12 virtualenv at $VENV_DIR"
+  "$PY312" -m venv "$VENV_DIR" || die "could not create venv with $PY312"
   "$VENV_DIR/bin/python" -m pip install --quiet --upgrade pip wheel setuptools 2>&1 | tail -n1
 fi
 
-# install ALL deps — torch FIRST (biggest), then transformers + moondream2 deps
+# install ALL deps with EXACT version pins:
+#   - transformers==4.56.1 (pinned — newer breaks moondream2 trust_remote_code)
+#   - torch>=2.7.0,<2.10 (PyTorch with MPS support, not too new)
+#   - accelerate, einops, Pillow, pyvips-binary, pyvips (moondream2 deps)
 if ! "$VENV_DIR/bin/python" -c "import torch" 2>/dev/null; then
-  log "installing torch (~2 GB, may take a minute)..."
-  "$VENV_DIR/bin/python" -m pip install --quiet torch torchvision 2>&1 | tail -n3
+  log "installing torch>=2.7.0,<2.10 (~2 GB, may take a minute)..."
+  "$VENV_DIR/bin/python" -m pip install --quiet "torch>=2.7.0,<2.10" torchvision 2>&1 | tail -n3
 fi
-if ! "$VENV_DIR/bin/python" -c "import transformers" 2>/dev/null; then
-  log "installing transformers + einops + timm + pillow..."
+if ! "$VENV_DIR/bin/python" -c "import transformers; assert transformers.__version__ == '4.56.1'" 2>/dev/null; then
+  log "installing transformers==4.56.1 (PINNED for moondream2 compatibility)..."
+  "$VENV_DIR/bin/python" -m pip install --quiet "transformers==4.56.1" 2>&1 | tail -n3
+fi
+if ! "$VENV_DIR/bin/python" -c "import accelerate, einops, pyvips" 2>/dev/null; then
+  log "installing accelerate + einops + Pillow + pyvips..."
   "$VENV_DIR/bin/python" -m pip install --quiet \
-      "transformers>=4.47.0" einops timm pillow huggingface_hub 2>&1 | tail -n3
+      "accelerate>=1.10.0" "Pillow>=11.0.0" einops \
+      "pyvips-binary==8.16.0" "pyvips==2.2.3" 2>&1 | tail -n3
 fi
 ok "venv ready: $($VENV_DIR/bin/python -c 'import torch, transformers; print(f"torch {torch.__version__}, transformers {transformers.__version__}")')"
 
-# --- 3. launch the moondream2 agent -----------------------------------------
-# The agent handles the entire flow: find Configure → click → find toggle →
-# click → type password → find Later → click → repeat.
+# --- 4. launch the moondream2 agent -----------------------------------------
 log "launching moondream2 agent (model downloads on first run, ~3.7 GB)"
-MOONDREAM_SERVICE="all-permissions" \
 MOONDREAM_PASSWORD="$MAC_USER_PASSWORD" \
 MOONDREAM_MAX_STEPS="30" \
 "$VENV_DIR/bin/python" "$PROJECT_ROOT/mac_moondream_agent.py" || {
@@ -74,7 +98,7 @@ MOONDREAM_MAX_STEPS="30" \
   warn "check the screenshots artifact for the final state"
 }
 
-# --- 4. final state ---------------------------------------------------------
+# --- 5. final state ---------------------------------------------------------
 take_screenshot "03_final_state"
 stop_screenshot_loop
 stop_dialog_dismissal_loop
