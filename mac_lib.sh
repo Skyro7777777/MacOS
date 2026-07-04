@@ -161,3 +161,103 @@ stop_screenshot_loop() {
     log "📸 screenshot loop stopped"
   fi
 }
+
+# --- Sequoia privacy-dialog auto-dismissal -----------------------------------
+# macOS 15 (Sequoia) added a NEW privacy prompt ON TOP of TCC:
+#   "[app] is requesting to bypass the system private window picker and
+#    directly access your screen and audio."
+# This appears even when the app HAS Screen Recording TCC permission.  It has
+# an "Allow" button and an "Open System Settings" button.  Since the operator
+# can't click it (they're not connected yet — chicken-and-egg), we auto-click
+# "Allow" via osascript (which inherits bash's Accessibility permission).
+#
+# This background loop runs every 2s and dismisses ANY window containing a
+# button named "Allow" that is part of a privacy prompt.  It dies with the
+# parent shell (like the screenshot loop).
+
+DIALOG_DISMISS_PID=""
+export DIALOG_DISMISS_PID
+
+start_dialog_dismissal_loop() {
+  # don't start twice in the same shell
+  if [ -n "$DIALOG_DISMISS_PID" ] && kill -0 "$DIALOG_DISMISS_PID" 2>/dev/null; then
+    return 0
+  fi
+  (
+    while true; do
+      # Click "Allow" on any privacy/security dialog.
+      # We target buttons named "Allow" in windows that also contain
+      # "bypass" or "screen" or "recording" or "access" text.
+      osascript -e '
+        try
+          tell application "System Events"
+            repeat with p in (every process whose name is "CoreServicesUIAgent" or name is "SecurityAgent" or name is "System Settings")
+              repeat with w in (windows of p)
+                try
+                  set wTitle to ""
+                  try
+                    set wTitle to title of w
+                  end try
+                  -- check if this window is a privacy prompt
+                  set isPrivacy to false
+                  try
+                    if wTitle contains "bypass" or wTitle contains "screen" or wTitle contains "recording" or wTitle contains "access" or wTitle contains "requesting" then
+                      set isPrivacy to true
+                    end if
+                  end try
+                  -- also check the window name (some dialogs have no title)
+                  try
+                    set wName to name of w
+                    if wName contains "bypass" or wName contains "screen" or wName contains "recording" or wName contains "access" or wName contains "requesting" then
+                      set isPrivacy to true
+                    end if
+                  end try
+                  -- broad fallback: any window with an "Allow" button
+                  if not isPrivacy then
+                    try
+                      set btns to every button of w
+                      repeat with b in btns
+                        try
+                          if (name of b as text) is "Allow" then
+                            set isPrivacy to true
+                            exit repeat
+                          end if
+                        end try
+                      end repeat
+                    end try
+                  end if
+                  if isPrivacy then
+                    -- find and click the "Allow" button
+                    try
+                      repeat with b in (every button of w)
+                        try
+                          if (name of b as text) is "Allow" then
+                            click b
+                            return "dismissed"
+                          end if
+                        end try
+                      end repeat
+                    end try
+                  end if
+                end try
+              end repeat
+            end repeat
+          end tell
+        end try
+      ' 2>/dev/null || true
+      sleep 2
+    done
+  ) &
+  DIALOG_DISMISS_PID=$!
+  disown 2>/dev/null || true
+  log "🤖 dialog-dismissal loop started (PID=$DIALOG_DISMISS_PID, interval=2s)"
+}
+
+stop_dialog_dismissal_loop() {
+  if [ -n "$DIALOG_DISMISS_PID" ]; then
+    kill "$DIALOG_DISMISS_PID" 2>/dev/null || true
+    wait "$DIALOG_DISMISS_PID" 2>/dev/null || true
+    DIALOG_DISMISS_PID=""
+    log "🤖 dialog-dismissal loop stopped"
+  fi
+}

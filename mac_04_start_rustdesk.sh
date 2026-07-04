@@ -14,6 +14,12 @@ log "Step 04 — launch RustDesk in GUI session + verify port $RUSTDESK_PORT"
 # critical step to capture — we need to see whether RustDesk actually launches,
 # whether its window appears, and whether any error dialog blocks the port.
 start_screenshot_loop
+
+# Restart the dialog-dismissal loop — macOS Sequoia shows a "bypass the system
+# private window picker" prompt when RustDesk tries to capture the screen.
+# This loop auto-clicks "Allow" so RustDesk can actually see the desktop.
+start_dialog_dismissal_loop
+
 take_screenshot "04_start"
 
 # --- 0. enable macOS Remote Login (SSH) so the operator can ssh in over the
@@ -59,9 +65,33 @@ sudo launchctl bootstrap "gui/$RUNNER_UID" "/Users/$RUNNER_USER/Library/LaunchAg
 # also open the GUI app so it registers with LaunchServices and shows its window
 gui_run open -a RustDesk || true
 
-# give RustDesk a moment to bring up its window, then screenshot
-sleep 5
+# Give RustDesk time to (a) bring up its window and (b) trigger the Sequoia
+# "bypass window picker" privacy prompt.  The dialog-dismissal loop (started
+# above) will auto-click "Allow" on that prompt.  We wait 15s so the loop
+# (2s interval) has several chances to catch and dismiss it.
+log "waiting 15s for RustDesk window + Sequoia privacy dialog auto-dismiss..."
+sleep 15
 take_screenshot "04_after_rustdesk_launch"
+
+# Check if any "bypass" dialog is STILL on screen after the dismissal loop
+if osascript -e '
+  tell application "System Events"
+    repeat with p in (every process whose name is "CoreServicesUIAgent" or name is "SecurityAgent")
+      repeat with w in (windows of p)
+        try
+          set wName to name of w
+          if wName contains "bypass" or wName contains "screen" then return "STILL_PRESENT"
+        end try
+      end repeat
+    end repeat
+  end tell
+  return "NO_DIALOG"
+' 2>/dev/null | grep -q "STILL_PRESENT"; then
+  warn "Sequoia privacy dialog still present after auto-dismiss — RustDesk may not capture the screen"
+  take_screenshot "04_dialog_still_present"
+else
+  ok "no privacy dialog blocking (or auto-dismissed)"
+fi
 
 # --- 4. wait for the direct-server port to come up --------------------------
 log "waiting for RustDesk to listen on TCP $RUSTDESK_PORT ..."
@@ -146,6 +176,7 @@ ok "connection info written to $STATE_DIR/connection-info.txt"
 # This is the "reality check" shot — what does the Mac actually look like?
 take_screenshot "04_final_desktop_state"
 stop_screenshot_loop
+stop_dialog_dismissal_loop
 
 # List how many screenshots we captured (for the log)
 SHOT_COUNT="$(find "$SCREENSHOT_DIR" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"

@@ -45,6 +45,16 @@ require_env RUSTDESK_PASSWORD
 # capture the System Settings panes during osascript/ShowUI click-through.
 start_screenshot_loop
 
+# Start the dialog-dismissal loop — macOS Sequoia shows a "bypass the system
+# private window picker" prompt when RustDesk/screencapture tries to capture
+# the screen.  We auto-click "Allow" so the capture actually works.
+start_dialog_dismissal_loop
+
+# Log whether the user forced the ShowUI path
+if [ "${USE_SHOWUI:-false}" = "true" ]; then
+  warn "USE_SHOWUI=true — skipping Layers 1 (sqlite3) and 2 (osascript), going straight to ShowUI-2B"
+fi
+
 # --- 0. make sure RustDesk has REGISTERED itself in the TCC lists ------------
 # A brand-new app is NOT in any privacy list until it has TRIED to use the
 # protected API.  We briefly start RustDesk so the OS records it; then we kill
@@ -130,7 +140,12 @@ grant_via_sqlite() {
     sudo killall tccd 2>/dev/null || true
     sleep 2
     if tcc_granted "$service" "$RUSTDESK_BUNDLE"; then
-      ok "  [L1 sqlite3] $service GRANTED"
+      # NOTE: on Sequoia, the DB row may exist but tccd can still reject it
+      # at runtime (csreq validation).  The "GRANTED" here means the DB row
+      # is present; whether the OS actually honours it is a separate question
+      # that only becomes visible when RustDesk tries to capture the screen
+      # and the Sequoia "bypass window picker" dialog appears (or doesn't).
+      ok "  [L1 sqlite3] $service GRANTED (DB row present — may need UI confirmation on Sequoia)"
       return 0
     fi
     warn "  [L1 sqlite3] INSERT ran but tccd did not honour it (Sequoia csreq validation?)"
@@ -227,10 +242,13 @@ for entry in "${PERMISSIONS[@]}"; do
     continue
   fi
 
-  grant_via_sqlite    "$service"            && { take_screenshot "03_${service}_after_sqlite_ok"; continue; }
-  take_screenshot "03_${service}_after_sqlite_fail"
-  grant_via_osascript "$service" "$url"     && { take_screenshot "03_${service}_after_osascript_ok"; continue; }
-  take_screenshot "03_${service}_after_osascript_fail"
+  # When USE_SHOWUI=true, skip Layers 1 and 2 and go straight to ShowUI-2B.
+  if [ "${USE_SHOWUI:-false}" != "true" ]; then
+    grant_via_sqlite    "$service"            && { take_screenshot "03_${service}_after_sqlite_ok"; continue; }
+    take_screenshot "03_${service}_after_sqlite_fail"
+    grant_via_osascript "$service" "$url"     && { take_screenshot "03_${service}_after_osascript_ok"; continue; }
+    take_screenshot "03_${service}_after_osascript_fail"
+  fi
   grant_via_showui    "$service" "$url" "$goal" && { take_screenshot "03_${service}_after_showui_ok"; continue; }
   take_screenshot "03_${service}_after_showui_fail"
 
