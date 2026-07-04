@@ -75,6 +75,15 @@ jobs:
       - name: 04 — Launch RustDesk in the GUI session & verify port 21118
         run: bash mac_04_start_rustdesk.sh
 
+      - name: Upload screenshots artifact (reality check)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-runner-screenshots
+          path: /tmp/apple-project/screenshots/
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: 05 — Hold session open & print connection info
         run: bash mac_05_hold_session.sh
 

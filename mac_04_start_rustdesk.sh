@@ -10,6 +10,12 @@ source "$(dirname "$0")/mac_lib.sh"
 
 log "Step 04 — launch RustDesk in GUI session + verify port $RUSTDESK_PORT"
 
+# Restart the screenshot loop (died with step 03's shell).  This is the most
+# critical step to capture — we need to see whether RustDesk actually launches,
+# whether its window appears, and whether any error dialog blocks the port.
+start_screenshot_loop
+take_screenshot "04_start"
+
 # --- 0. enable macOS Remote Login (SSH) so the operator can ssh in over the
 #     Tailscale IP to touch the done-flag file without using the RustDesk GUI.
 #     (Tailscale's own --ssh doesn't work with the brew CLI build — see
@@ -53,16 +59,22 @@ sudo launchctl bootstrap "gui/$RUNNER_UID" "/Users/$RUNNER_USER/Library/LaunchAg
 # also open the GUI app so it registers with LaunchServices and shows its window
 gui_run open -a RustDesk || true
 
+# give RustDesk a moment to bring up its window, then screenshot
+sleep 5
+take_screenshot "04_after_rustdesk_launch"
+
 # --- 4. wait for the direct-server port to come up --------------------------
 log "waiting for RustDesk to listen on TCP $RUSTDESK_PORT ..."
 if ! wait_for 45 port_open "$RUSTDESK_PORT"; then
   warn "RustDesk not listening on $RUSTDESK_PORT after 45s"
   warn "process list:"
   pgrep -lf RustDesk || warn "  (no RustDesk process found)"
+  take_screenshot "04_port_check_failed"
   warn "letting the job continue — the client may still connect once RustDesk finishes booting"
 else
   ok "RustDesk is listening on TCP $RUSTDESK_PORT"
   lsof -nP -iTCP:"$RUSTDESK_PORT" -sTCP:LISTEN | tail -n +1
+  take_screenshot "04_port_check_ok"
 fi
 
 # --- 5. print the connection block ------------------------------------------
@@ -129,3 +141,13 @@ EOF
 
 cat "$STATE_DIR/connection-info.txt"
 ok "connection info written to $STATE_DIR/connection-info.txt"
+
+# Final screenshot showing the desktop state before the hold session begins.
+# This is the "reality check" shot — what does the Mac actually look like?
+take_screenshot "04_final_desktop_state"
+stop_screenshot_loop
+
+# List how many screenshots we captured (for the log)
+SHOT_COUNT="$(find "$SCREENSHOT_DIR" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
+ok "captured $SHOT_COUNT screenshots total -> $SCREENSHOT_DIR"
+log "screenshots will be uploaded as a GitHub Actions artifact in the next step"

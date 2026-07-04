@@ -181,6 +181,11 @@ xattr -dr com.apple.quarantine "$RUSTDESK_APP" 2>/dev/null || true
 [ -x "$RUSTDESK_BIN" ] || die "RustDesk binary not present at $RUSTDESK_BIN after install"
 ok "RustDesk installed: $($RUSTDESK_BIN --version 2>/dev/null || echo 'unknown version')"
 
+# Start periodic screenshot capture NOW — we want to see the desktop during
+# config write, plist install, and the TCC registration launch in step 03.
+start_screenshot_loop
+take_screenshot "02_after_rustdesk_install"
+
 # --- 2. write RustDesk.toml (id + password) ---------------------------------
 # RustDesk.toml holds the peer ID and the permanent password.
 # We write PLAINTEXT — RustDesk's `decrypt_str_or_original` treats any string
@@ -240,3 +245,6 @@ ok "RustDesk id=$RUSTDESK_ID  password=********  (stored in $STATE_DIR/rustdesk-
 
 ok "RustDesk configured for direct-IP on port $RUSTDESK_PORT (no relay)"
 log "next step will grant Screen Recording / Accessibility / Input Monitoring"
+
+# final screenshot of step 02 state
+take_screenshot "02_end_config_complete"

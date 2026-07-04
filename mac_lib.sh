@@ -105,3 +105,59 @@ TCC_ACCESSIBILITY="kTCCServiceAccessibility"
 TCC_INPUT_MONITORING="kTCCServiceListenEvent"
 TCC_SYSTEM_DB="/Library/Application Support/com.apple.TCC/TCC.db"
 export TCC_SCREEN_CAPTURE TCC_ACCESSIBILITY TCC_INPUT_MONITORING TCC_SYSTEM_DB
+
+# --- screenshot capture ------------------------------------------------------
+# screencapture inherits bash's Screen Recording TCC permission (the "responsible
+# process" model attributes child processes to bash, which is pre-granted on the
+# GHA macos-15 runner).  We capture periodic + labeled screenshots into a shared
+# directory so they can be uploaded as a GitHub Actions artifact for debugging.
+
+SCREENSHOT_DIR="$STATE_DIR/screenshots"
+SCREENSHOT_INTERVAL="${SCREENSHOT_INTERVAL:-5}"   # seconds between loop shots
+SCREENSHOT_LOOP_PID=""
+export SCREENSHOT_DIR SCREENSHOT_INTERVAL
+
+# Take a single timestamped screenshot with a descriptive label.
+# Usage: take_screenshot "after_rustdesk_install"
+take_screenshot() {
+  local label="${1:-shot}"
+  mkdir -p "$SCREENSHOT_DIR"
+  local ts; ts="$(date +%Y%m%d_%H%M%S)"
+  local path="$SCREENSHOT_DIR/${ts}_${label}.png"
+  # -x no sound, -C include cursor
+  screencapture -x -C "$path" 2>/dev/null || true
+  log "📸 screenshot: ${ts}_${label}.png"
+}
+
+# Start a background screenshot loop for the current step.  The loop runs as a
+# child of THIS shell, so it inherits bash's Screen Recording permission.  It
+# dies automatically when the step's shell exits — call start_screenshot_loop
+# again at the top of the next step if you want continuous capture.
+start_screenshot_loop() {
+  mkdir -p "$SCREENSHOT_DIR"
+  # don't start twice in the same shell
+  if [ -n "$SCREENSHOT_LOOP_PID" ] && kill -0 "$SCREENSHOT_LOOP_PID" 2>/dev/null; then
+    return 0
+  fi
+  # background subshell — dies with the parent shell
+  (
+    while true; do
+      ts="$(date +%Y%m%d_%H%M%S)"
+      screencapture -x -C "$SCREENSHOT_DIR/loop_${ts}.png" 2>/dev/null || true
+      sleep "$SCREENSHOT_INTERVAL"
+    done
+  ) &
+  SCREENSHOT_LOOP_PID=$!
+  disown 2>/dev/null || true
+  log "📸 screenshot loop started (PID=$SCREENSHOT_LOOP_PID, interval=${SCREENSHOT_INTERVAL}s)"
+}
+
+# Stop the background screenshot loop (called at the end of a step).
+stop_screenshot_loop() {
+  if [ -n "$SCREENSHOT_LOOP_PID" ]; then
+    kill "$SCREENSHOT_LOOP_PID" 2>/dev/null || true
+    wait "$SCREENSHOT_LOOP_PID" 2>/dev/null || true
+    SCREENSHOT_LOOP_PID=""
+    log "📸 screenshot loop stopped"
+  fi
+}

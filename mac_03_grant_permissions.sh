@@ -41,6 +41,10 @@ log "Step 03 — grant TCC permissions to RustDesk (sqlite3 -> osascript -> Show
 
 require_env RUSTDESK_PASSWORD
 
+# Restart the screenshot loop (it died with step 02's shell).  We want to
+# capture the System Settings panes during osascript/ShowUI click-through.
+start_screenshot_loop
+
 # --- 0. make sure RustDesk has REGISTERED itself in the TCC lists ------------
 # A brand-new app is NOT in any privacy list until it has TRIED to use the
 # protected API.  We briefly start RustDesk so the OS records it; then we kill
@@ -51,12 +55,15 @@ register_rustdesk_in_tcc() {
     return
   fi
   log "briefly launching RustDesk so it registers in the TCC lists..."
+  take_screenshot "03_before_tcc_register"
   gui_run open -a RustDesk || true
   # give it ~6 seconds to attempt screen capture / input monitoring and
   # trigger the TCC registration
   sleep 6
+  take_screenshot "03_rustdesk_running_for_tcc"
   pkill -x RustDesk 2>/dev/null || true
   sleep 1
+  take_screenshot "03_after_tcc_register"
   ok "RustDesk registered (it should now appear in the privacy lists)"
 }
 register_rustdesk_in_tcc
@@ -212,15 +219,20 @@ FAILED=()
 for entry in "${PERMISSIONS[@]}"; do
   IFS='|' read -r service url goal <<< "$entry"
   log "=== Permission: $service ==="
+  take_screenshot "03_before_${service}"
 
   if tcc_granted "$service" "$RUSTDESK_BUNDLE"; then
     ok "$service already granted — skipping"
+    take_screenshot "03_${service}_already_granted"
     continue
   fi
 
-  grant_via_sqlite    "$service"            && continue
-  grant_via_osascript "$service" "$url"     && continue
-  grant_via_showui    "$service" "$url" "$goal" && continue
+  grant_via_sqlite    "$service"            && { take_screenshot "03_${service}_after_sqlite_ok"; continue; }
+  take_screenshot "03_${service}_after_sqlite_fail"
+  grant_via_osascript "$service" "$url"     && { take_screenshot "03_${service}_after_osascript_ok"; continue; }
+  take_screenshot "03_${service}_after_osascript_fail"
+  grant_via_showui    "$service" "$url" "$goal" && { take_screenshot "03_${service}_after_showui_ok"; continue; }
+  take_screenshot "03_${service}_after_showui_fail"
 
   err "FAILED to grant $service by any method"
   FAILED+=("$service")
