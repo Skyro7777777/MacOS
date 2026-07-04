@@ -200,13 +200,30 @@ grant_via_showui() {
     log "  installing cliclick (input injector — inherits bash Accessibility)"
     brew install cliclick
   fi
-  if ! python3 -c "import transformers" 2>/dev/null; then
-    log "  installing Python deps (transformers, qwen-vl-utils, torch, ...)"
-    python3 -m pip install --user --quiet \
-        "transformers>=4.47.0" qwen-vl-utils accelerate pillow huggingface_hub 2>&1 | tail -n2
-    # torch for Apple Silicon (MPS) — the runner is macos-15 = arm64
-    python3 -m pip install --user --quiet torch torchvision 2>&1 | tail -n2
+
+  # Use a virtualenv — the macOS runner's system Python is "externally managed"
+  # (PEP 668) so `pip install --user` is BLOCKED.  A venv avoids this entirely
+  # and isolates the heavy deps (torch ~2GB, transformers, etc.).
+  # The venv is cached across the 3 permission attempts (same job).
+  local venv_dir="$STATE_DIR/showui-venv"
+  if [ ! -x "$venv_dir/bin/python" ]; then
+    log "  creating Python virtualenv at $venv_dir"
+    python3 -m venv "$venv_dir" || die "could not create venv"
+    # upgrade pip + wheel first (needed for torch wheel resolution)
+    "$venv_dir/bin/python" -m pip install --quiet --upgrade pip wheel setuptools 2>&1 | tail -n1
   fi
+
+  # install deps into the venv if torch isn't there yet
+  if ! "$venv_dir/bin/python" -c "import torch" 2>/dev/null; then
+    log "  installing Python deps into venv (transformers, qwen-vl-utils, torch, ...)"
+    # install torch FIRST (it's the biggest + most finicky), then the rest
+    log "    installing torch (this is ~2 GB, may take a minute)..."
+    "$venv_dir/bin/python" -m pip install --quiet torch torchvision 2>&1 | tail -n2
+    log "    installing transformers + qwen-vl-utils + accelerate..."
+    "$venv_dir/bin/python" -m pip install --quiet \
+        "transformers>=4.47.0" qwen-vl-utils accelerate pillow huggingface_hub 2>&1 | tail -n2
+  fi
+  ok "  venv ready: $($venv_dir/bin/python -c 'import torch; print(f"torch {torch.__version__}")')"
 
   # the model is ~4.2 GB; let it auto-download on first run into the HF cache
   log "  launching ShowUI-2B agent (model downloads on first run, ~4.2 GB)"
@@ -215,7 +232,7 @@ grant_via_showui() {
   SHOWUI_SERVICE="$service" \
   SHOWUI_HELPER_USER="$MAC_USER" \
   SHOWUI_HELPER_PASSWORD="$(sudo sed -n 's/^MAC_USER_PASSWORD=//p' "$STATE_DIR/helper-user.env" 2>/dev/null)" \
-  python3 "$PROJECT_ROOT/mac_showui_agent.py" && {
+  "$venv_dir/bin/python" "$PROJECT_ROOT/mac_showui_agent.py" && {
     ok "  [L3 ShowUI-2B] $service GRANTED"
     return 0
   }
