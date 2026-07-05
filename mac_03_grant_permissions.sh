@@ -89,8 +89,36 @@ start_dialog_dismissal_loop
 # --- 4. write the Open Interpreter script -----------------------------------
 OI_SCRIPT="/tmp/oi_grant_permissions.py"
 cat > "$OI_SCRIPT" <<PYEOF
-import os, sys, time
+import os, sys, time, subprocess
 os.environ["INTERPRETER_FORCE_LOCAL"] = "1"
+
+# CRITICAL FIX: monkey-patch pywinctl BEFORE importing interpreter.
+# On macOS 15 GHA runners, pywinctl.getActiveWindow() returns None (no window
+# manager support in headless/CI mode), causing:
+#   AttributeError: 'NoneType' object has no attribute 'getActiveWindow'
+# We patch pywinctl to return a dummy object so OI's screenshot() doesn't crash.
+# OI's screenshot() uses pyautogui for active_app_only screenshots — we disable
+# that path and force the full-screen screencapture path instead.
+try:
+    import pywinctl
+    # Create a dummy that returns None for getActiveWindow (OI will fall back
+    # to the full-screen screenshot path when active_window is None)
+    _orig_init = pywinctl.__init__
+    class _DummyPyWinCtl:
+        @staticmethod
+        def getActiveWindow():
+            return None  # force OI to use full-screen screenshot, not active_app_only
+        @staticmethod
+        def getAllWindows():
+            return []
+        @staticmethod
+        def getActiveWindowTitle():
+            return ""
+    # Replace the module
+    sys.modules['pywinctl'] = _DummyPyWinCtl()
+    print("    [oi] patched pywinctl (getActiveWindow returns None — forces full-screen screenshot)", flush=True)
+except Exception as e:
+    print(f"    [oi] pywinctl patch skipped: {e}", flush=True)
 
 from interpreter import interpreter
 
@@ -109,6 +137,30 @@ interpreter.llm.max_tokens = 2000
 interpreter.computer.import_computer_api = True
 interpreter.computer.emit_images = True
 interpreter.computer.offline = True
+
+# CRITICAL: patch OI's display.screenshot to use the system 'screencapture'
+# command instead of pyautogui (which depends on pywinctl and crashes).
+# screencapture inherits bash's Screen Recording TCC permission.
+_orig_screenshot = None
+def _patched_screenshot(self, screen=0, show=False, quadrant=None, active_app_only=False, combine_screens=True):
+    """Use system screencapture instead of pyautogui — more reliable on macOS."""
+    import tempfile
+    path = os.path.join(tempfile.gettempdir(), f"oi_screenshot_{int(time.time()*1000)}.png")
+    # use screencapture (inherits bash's Screen Recording TCC permission)
+    subprocess.run(["screencapture", "-x", "-C", path], check=True)
+    from PIL import Image
+    img = Image.open(path)
+    if show:
+        img.show()
+    return img
+
+# Apply the patch AFTER importing interpreter
+try:
+    _orig_screenshot = interpreter.computer.display.screenshot
+    interpreter.computer.display.screenshot = lambda *a, **kw: _patched_screenshot(interpreter.computer.display, *a, **kw)
+    print("    [oi] patched display.screenshot to use system screencapture", flush=True)
+except Exception as e:
+    print(f"    [oi] display.screenshot patch skipped: {e}", flush=True)
 
 print("    [oi] Open Interpreter configured — local LLaVA 7B via Ollama", flush=True)
 print("    [oi] starting multi-step permission task...", flush=True)
@@ -147,7 +199,9 @@ try:
     print("    [oi] task completed", flush=True)
     sys.exit(0)
 except Exception as e:
+    import traceback
     print(f"    [oi] ERROR: {e}", flush=True)
+    traceback.print_exc()
     sys.exit(1)
 PYEOF
 
