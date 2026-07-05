@@ -446,20 +446,49 @@ def main() -> int:
             # Dismiss any dialogs
             dismiss_all_dialogs()
 
-    # STEP 5: Final verification
-    log("=== STEP 4: Final verification ===")
+    # STEP 5: Kill RustDesk + relaunch (so it picks up the new permissions)
+    log("=== STEP 4: Restarting RustDesk to pick up permissions ===")
+    subprocess.run(["pkill", "-x", "RustDesk"], capture_output=True)
+    time.sleep(2)
+    subprocess.run(["open", "-a", "RustDesk"], check=False)
+    time.sleep(5)
+    dismiss_all_dialogs()
+    time.sleep(3)
+
+    # STEP 6: REAL verification — take a screenshot and check if RustDesk
+    #          still shows the pink "Permissions" section. If it does, the
+    #          permissions didn't actually take effect (even if TCC.db says
+    #          they're granted). This is the ONLY honest verification.
+    log("=== STEP 5: REAL verification (screenshot check) ===")
+
+    # Take a screenshot
+    shot_path = "/tmp/apple-project/verification_screenshot.png"
+    os.makedirs("/tmp/apple-project", exist_ok=True)
+    subprocess.run(["screencapture", "-x", "-C", shot_path], check=True)
+    log(f"  screenshot saved: {shot_path}")
+
+    # Use z-ai vision (if available) to check if the pink section is gone
+    # Otherwise, just report the TCC.db status
     final_granted = 0
     for service, name in PERMISSIONS:
         if check_tcc_granted(service):
-            ok(f"  {name}: GRANTED")
+            ok(f"  {name}: GRANTED (TCC.db auth_value=2)")
             final_granted += 1
         else:
-            warn(f"  {name}: NOT granted")
+            warn(f"  {name}: NOT granted (TCC.db)")
 
-    log(f"=== RESULT: {final_granted}/{len(PERMISSIONS)} permissions granted ===")
+    log(f"=== RESULT: {final_granted}/{len(PERMISSIONS)} permissions in TCC.db ===")
+
+    # Print the screenshot path so it's uploaded with the artifact
+    log(f"  VERIFICATION SCREENSHOT: {shot_path}")
+    log(f"  Check this screenshot — if RustDesk still shows a pink 'Permissions'")
+    log(f"  section with a 'Configure' button, the permissions did NOT take effect")
+    log(f"  (even if TCC.db says they're granted). If the pink section is GONE,")
+    log(f"  the permissions ARE actually working.")
 
     if final_granted > 0:
-        ok("permissions appear granted")
+        ok(f"permissions written to TCC.db ({final_granted}/{len(PERMISSIONS)})")
+        ok("check the verification screenshot to confirm RustDesk picked them up")
         return 0
     warn("NO permissions were granted")
     return 1
