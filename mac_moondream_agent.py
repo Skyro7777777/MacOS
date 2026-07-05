@@ -59,6 +59,10 @@ def log(msg: str) -> None:
     print(f"    [moondream] {msg}", flush=True)
 
 
+def ok(msg: str) -> None:
+    print(f"    [moondream][ OK ] {msg}", flush=True)
+
+
 def die(msg: str, code: int = 1) -> None:
     print(f"    [moondream][FAIL] {msg}", flush=True)
     sys.exit(code)
