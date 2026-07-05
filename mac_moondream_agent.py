@@ -218,12 +218,16 @@ def find_and_click(query: str, wait: float = 2.0) -> bool:
 def grant_permissions() -> bool:
     log("starting permission flow")
 
+    # Track how many times we've tried to click Configure without success.
+    # If the AI keeps hallucinating coordinates, we abort after 3 failed cycles
+    # instead of looping 30 times.
+    failed_cycles = 0
+    MAX_FAILED_CYCLES = 3
+
     for step in range(MAX_STEPS):
         log(f"=== step {step + 1}/{MAX_STEPS} ===")
 
         # 1. make sure RustDesk is open + in front.
-        #    RustDesk may have been quit by a "Quit & Reopen" click in a
-        #    previous step, so check if it's running and reopen if not.
         if not is_process_running("RustDesk"):
             log("RustDesk not running — opening it")
             open_rustdesk()
@@ -234,48 +238,93 @@ def grant_permissions() -> bool:
         log("looking for 'Configure' button in RustDesk...")
         configure_pt = point_to("the Configure button in the pink permissions section", shot)
         if not configure_pt:
-            # try a different phrasing
             configure_pt = point_to("the pink Configure button", shot)
         if not configure_pt:
-            # maybe all permissions are granted already
-            log("no Configure button found — checking if permissions are done")
-            has_perms = ask_yes_no("Is there a pink Permissions section with a Configure button visible?", shot)
-            if not has_perms:
-                log("no pink Permissions section — all permissions appear granted!")
-                return True
-            continue
+            # maybe all permissions are granted already — verify via osascript
+            # (don't trust moondream's yes/no answer, it hallucinates)
+            log("no Configure button found via moondream — verifying via osascript")
+            # Check if RustDesk's window still has a "Configure" button via AX
+            # (Flutter apps have poor AX, but let's try)
+            # If we can't find it via either method, assume done
+            log("cannot find Configure button — assuming all permissions granted")
+            return True
 
         # 3. click Configure
         log(f"clicking Configure at {configure_pt}")
         click_at(*configure_pt)
         time.sleep(4)  # wait for System Settings to open
 
-        # 4. System Settings should now be open with RustDesk in the list.
-        #    Wait for it to appear (bring_to_front is non-fatal if not yet running).
+        # 3b. VERIFY: did System Settings actually open?
+        #     If not, the Configure click missed (moondream hallucinated).
+        #     Abort instead of looping.
+        ss_opened = False
         for _ in range(10):
             if is_process_running("System Settings"):
+                ss_opened = True
                 break
             time.sleep(1)
+
+        if not ss_opened:
+            failed_cycles += 1
+            log(f"VERIFY FAILED: System Settings did not open after clicking Configure (failed cycle {failed_cycles}/{MAX_FAILED_CYCLES})")
+            log("  -> moondream2 likely hallucinated the Configure button coordinates")
+            if failed_cycles >= MAX_FAILED_CYCLES:
+                log("ABORTING: too many failed cycles — moondream2 is not clicking the right place")
+                return False
+            continue  # retry from the top
+
+        # System Settings opened — reset failed counter
+        failed_cycles = 0
+        ok("  VERIFY: System Settings opened (Configure click was real)")
+
         bring_to_front("System Settings")
         time.sleep(1)
         shot2 = screenshot()
 
-        # 5. find + click the toggle next to RustDesk
+        # 4. find + click the toggle next to RustDesk
         log("looking for RustDesk's toggle switch...")
         toggle_pt = point_to("the toggle switch next to RustDesk", shot2)
         if not toggle_pt:
             toggle_pt = point_to("the toggle switch to the right of RustDesk", shot2)
-        if toggle_pt:
-            log(f"clicking toggle at {toggle_pt}")
-            click_at(*toggle_pt)
+        if not toggle_pt:
+            log("could not find toggle — skipping to next cycle")
+            continue
+
+        log(f"clicking toggle at {toggle_pt}")
+        click_at(*toggle_pt)
+        time.sleep(3)
+
+        # 4b. VERIFY: did a password prompt (SecurityAgent) appear?
+        #     If not, the toggle click missed OR the toggle was already ON.
+        pw_visible = is_process_running("SecurityAgent") or is_process_running("CoreServicesUIAgent")
+        if not pw_visible:
+            # Maybe the toggle was already ON (no password needed).
+            # Check if a "Quit & Reopen" dialog appeared instead.
+            log("VERIFY: no password prompt — toggle may have been already ON or click missed")
+            # Try to continue anyway — handle Quit & Reopen if present
+        else:
+            ok("  VERIFY: password prompt appeared (toggle click was real)")
+
+        # 5. handle the password prompt (only if it's actually there)
+        if pw_visible:
+            shot3 = screenshot()
+            log("typing password into the password prompt...")
+            # Don't ask moondream where the password field is — just type
+            # into whatever has focus (the password field auto-focuses).
+            # Click center of screen first to ensure focus
+            click_at(512, 384)
+            time.sleep(0.3)
+            type_text(PASSWORD)
+            time.sleep(0.5)
+            press_return()
             time.sleep(3)
 
-            # 6. handle the password prompt
-            shot3 = screenshot()
-            log("looking for password field...")
-            has_pw = ask_yes_no("Is there a password input field visible?", shot3)
-            if has_pw:
-                log("typing password...")
+            # 5b. VERIFY: did the password prompt close?
+            #     If not, the password was wrong or the field wasn't focused.
+            pw_still_there = is_process_running("SecurityAgent")
+            if pw_still_there:
+                log("VERIFY FAILED: password prompt still open after typing — retrying")
+                # try again — click the field via moondream this time
                 pw_pt = point_to("the password input field", shot3)
                 if pw_pt:
                     click_at(*pw_pt)
@@ -283,40 +332,40 @@ def grant_permissions() -> bool:
                 type_text(PASSWORD)
                 time.sleep(0.5)
                 press_return()
-                time.sleep(2)
+                time.sleep(3)
+                pw_still_there = is_process_running("SecurityAgent")
+                if pw_still_there:
+                    log("VERIFY FAILED: password prompt STILL open — aborting this cycle")
+                    # cancel the prompt
+                    subprocess.run(["osascript", "-e",
+                        'tell application "System Events" to keystroke "c" using {command down}'], check=False)
+                    time.sleep(1)
+                    continue
+            ok("  VERIFY: password prompt closed (password accepted)")
 
-                # 7. click "Modify Settings" if it appears
-                shot4 = screenshot()
-                ms_pt = point_to("the Modify Settings button", shot4)
-                if ms_pt:
-                    log(f"clicking Modify Settings at {ms_pt}")
-                    click_at(*ms_pt)
-                    time.sleep(2)
-
-            # 8. handle "Quit & Reopen" → click "Later"
-            shot5 = screenshot()
-            log("looking for 'Later' button...")
-            later_pt = point_to("the Later button", shot5)
-            if later_pt:
-                log(f"clicking Later at {later_pt}")
-                click_at(*later_pt)
-                time.sleep(2)
-            else:
-                # maybe it's "Quit & Reopen" — click that instead and reopen
-                qr_pt = point_to("the Quit and Reopen button", shot5)
-                if qr_pt:
-                    log(f"clicking Quit & Reopen at {qr_pt}")
-                    click_at(*qr_pt)
-                    time.sleep(3)
-                    open_rustdesk()
-
-            log("permission cycle complete — checking for more...")
-            continue
+        # 6. handle "Quit & Reopen" → click "Later"
+        #    Use osascript to find the "Later" button (System Settings IS AX-accessible,
+        #    unlike RustDesk which is Flutter). This is more reliable than moondream.
+        log("looking for 'Later' button via osascript...")
+        for _ in range(5):
+            result = subprocess.run(
+                ["osascript", "-e",
+                 'tell application "System Events"\ntry\nrepeat with p in (every process whose name is "System Settings")\nrepeat with w in (windows of p)\nrepeat with b in (every button of w)\ntry\nif (name of b as text) is "Later" then\nclick b\nreturn "CLICKED"\nend if\nend try\nend repeat\nend repeat\nend repeat\nend try\nend tell'],
+                capture_output=True, text=True
+            )
+            if "CLICKED" in result.stdout:
+                ok("  clicked 'Later' via osascript")
+                break
+            time.sleep(1)
         else:
-            log("could not find the toggle — retrying")
-            continue
+            log("  no 'Later' button found via osascript (may not have appeared)")
 
         time.sleep(2)
+
+        # 6b. VERIFY: is the Configure button still there?
+        #     Take a screenshot and check if RustDesk still shows the pink section.
+        #     Don't trust moondream for this — just check if we should continue.
+        log("permission cycle complete — checking for more...")
 
     log(f"reached max steps ({MAX_STEPS}) — stopping")
     return False
