@@ -49,6 +49,20 @@ def type_text(text: str) -> None:
     time.sleep(0.3)
 
 
+def type_password_at(password: str, x: int, y: int) -> None:
+    """Click at (x,y) to focus the password field, clear it, type password, press Return."""
+    subprocess.run(["cliclick", f"c:{x},{y}"], capture_output=True)
+    time.sleep(0.5)
+    subprocess.run(["cliclick", "kp:cmd+a"], capture_output=True)
+    time.sleep(0.1)
+    subprocess.run(["cliclick", "kp:delete"], capture_output=True)
+    time.sleep(0.1)
+    subprocess.run(["cliclick", f"t:{password}"], capture_output=True)
+    time.sleep(0.3)
+    subprocess.run(["cliclick", "kp:return"], capture_output=True)
+    time.sleep(0.5)
+
+
 def press_key(key: str) -> None:
     key_map = {
         "return": "return",
@@ -56,17 +70,15 @@ def press_key(key: str) -> None:
         "escape": "escape",
         "space": "space",
         "delete": "delete",
-        "cmd_g": '"g" using {command down, shift down}',
-        "cmd_a": '"a" using {command down}',
-        "cmd_c": '"c" using {command down}',
-        "cmd_v": '"v" using {command down}',
-        "cmd_w": '"w" using {command down}',
-        "cmd_q": '"q" using {command down}',
+        "cmd_g": "cmd+shift+g",
+        "cmd_a": "cmd+a",
+        "cmd_c": "cmd+c",
+        "cmd_v": "cmd+v",
+        "cmd_w": "cmd+w",
+        "cmd_q": "cmd+q",
     }
-    action = key_map.get(key, key)
-    subprocess.run(["osascript", "-e",
-                    f'tell application "System Events" to keystroke {action}'],
-                   capture_output=True)
+    cliclick_key = key_map.get(key, key)
+    subprocess.run(["cliclick", f"kp:{cliclick_key}"], capture_output=True)
     time.sleep(0.3)
 
 
@@ -120,6 +132,12 @@ HTML_PAGE = """<!DOCTYPE html>
         <button onclick="doKey('delete')">⌫</button>
         <button onclick="doKey('cmd_g')">⌘⇧G</button>
         <button onclick="doKey('cmd_v')">⌘V</button>
+        <span style="color:#555;margin:0 5px">|</span>
+        <label style="color:#ff0">PW X:</label>
+        <input type="number" id="pw_x" value="504" style="width:50px">
+        <label style="color:#ff0">Y:</label>
+        <input type="number" id="pw_y" value="467" style="width:50px">
+        <button onclick="doTypePassword()" style="background:#d63031">🔐 Type Password</button>
         <span style="color:#555;margin:0 5px">|</span>
         <button onclick="openPane('screen')">Screen Rec</button>
         <button onclick="openPane('accessibility')">Accessibility</button>
@@ -270,6 +288,20 @@ HTML_PAGE = """<!DOCTYPE html>
                 });
         }
 
+        function doTypePassword() {
+            const x = document.getElementById('pw_x').value;
+            const y = document.getElementById('pw_y').value;
+            const pw = document.getElementById('text_input').value;
+            if (!pw) { setStatus('Enter password in text box first!'); return; }
+            setStatus('Typing password at (' + x + ',' + y + ')...');
+            fetch('/type_password?x=' + x + '&y=' + y + '&text=' + encodeURIComponent(pw))
+                .then(r => r.text())
+                .then(data => {
+                    setStatus('Password typed + Return pressed');
+                    setTimeout(refresh, 1000);
+                });
+        }
+
         // Initial load
         refresh();
     </script>
@@ -305,6 +337,17 @@ class RemoteHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
             self.wfile.write(f"({x},{y}) {button}".encode())
+
+        elif self.path.startswith("/type_password"):
+            params = parse_qs(urlparse(self.path).query)
+            x = int(params.get("x", ["504"])[0])
+            y = int(params.get("y", ["467"])[0])
+            text = params.get("text", [""])[0]
+            type_password_at(text, x, y)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(f"password typed at ({x},{y})".encode())
 
         elif self.path.startswith("/type"):
             params = parse_qs(urlparse(self.path).query)
