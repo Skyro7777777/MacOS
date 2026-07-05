@@ -46,8 +46,11 @@ def _patched_getattr(self, name):
     return _orig_getattr(self, name)
 torch.nn.Module.__getattr__ = _patched_getattr
 
-MODEL_ID = os.environ.get("MOONDREAM_MODEL", "vikhyatk/moondream2")
-MODEL_REV = os.environ.get("MOONDREAM_REV", "2025-06-21")
+# Use the 4-bit quantized moondream2 — only 1.13 GB (vs 3.7 GB for the full
+# model). Downloads in ~40-60s instead of 3-6 min. Same point() API.
+# If the quantized model fails, fall back to the full model.
+MODEL_ID = os.environ.get("MOONDREAM_MODEL", "Azaz666/moondream2-PYTORCH-INT4")
+MODEL_REV = os.environ.get("MOONDREAM_REV", "main")
 MAX_STEPS = int(os.environ.get("MOONDREAM_MAX_STEPS", "30"))
 PASSWORD = os.environ.get("MOONDREAM_PASSWORD", "")
 
@@ -140,6 +143,15 @@ def load_model():
     if torch.backends.mps.is_available():
         _device = "mps"
         dtype = torch.float16
+        # CRITICAL for the INT4 quantized model: torchao's int4_weight_only
+        # kernel is CUDA-only; MPS falls back to CPU for the re-quantization
+        # step. Set this env var so torchao ops don't crash on MPS.
+        os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+        # CRITICAL: Azaz666's QuantizedLinear.unpack() calls torch.cuda.empty_cache()
+        # unconditionally, which crashes on Macs (no CUDA). Patch it to a no-op.
+        if not hasattr(torch.cuda, "_original_empty_cache"):
+            torch.cuda._original_empty_cache = torch.cuda.empty_cache
+            torch.cuda.empty_cache = lambda: None
     elif torch.cuda.is_available():
         _device = "cuda"
         dtype = torch.float16
@@ -147,19 +159,14 @@ def load_model():
         _device = "cpu"
         dtype = torch.float32
     log(f"device={_device} dtype={dtype}")
+    log(f"model={MODEL_ID} (rev={MODEL_REV})")
 
-    # CRITICAL: pre-download the model with EXPLICIT progress logging BEFORE
-    # from_pretrained. Without this, the 3.59 GiB download happens silently
-    # inside from_pretrained — the tqdm progress bar is hidden in CI (non-TTY
-    # shells don't render \r animation), so it looks like the script is hung
-    # for 5+ minutes. By calling snapshot_download first, we get visible
-    # "downloading model.safetensors: 45%" lines in the GHA log.
-    import os
+    # Pre-download with visible progress (avoids silent hang in CI)
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "0")
     os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
     try:
         from huggingface_hub import snapshot_download
-        log(f"pre-downloading {MODEL_ID} (rev={MODEL_REV}, ~3.7 GB) with progress...")
+        log(f"pre-downloading {MODEL_ID} (~1.1 GB INT4 quantized) with progress...")
         log("  (if this seems stuck, it's downloading — watch for progress bars below)")
         snapshot_download(
             repo_id=MODEL_ID,
