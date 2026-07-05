@@ -66,8 +66,11 @@ rm -rf "$VENV_DIR"
 python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/python" -m pip install --quiet --upgrade pip 2>&1 | tail -n1
 
-log "installing setuptools (required by OI for pkg_resources)"
-"$VENV_DIR/bin/python" -m pip install --quiet setuptools 2>&1 | tail -n1
+log "installing setuptools==80.10.2 (required by OI — setuptools 82+ REMOVED pkg_resources)"
+# CRITICAL: setuptools 82.0.0+ removed pkg_resources entirely. Open Interpreter
+# 0.4.3 imports pkg_resources, so we MUST pin setuptools to 80.10.2 (the last
+# version that includes it). See https://setuptools.pypa.io/en/latest/deprecated/pkg_resources.html
+"$VENV_DIR/bin/python" -m pip install --quiet "setuptools==80.10.2" 2>&1 | tail -n1
 
 log "installing open-interpreter==0.4.3 (the version with --os mode)"
 "$VENV_DIR/bin/python" -m pip install --quiet "open-interpreter==0.4.3" 2>&1 | tail -n3
