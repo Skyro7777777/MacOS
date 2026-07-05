@@ -65,6 +65,9 @@ fi
 
 if ! "$VENV_DIR/bin/python" -c "import interpreter" 2>/dev/null; then
   log "installing open-interpreter==0.4.3 (the version with --os mode)"
+  # CRITICAL: install setuptools first — open-interpreter 0.4.3 needs pkg_resources
+  # (part of setuptools) but Python 3.12 venvs don't include it by default
+  "$VENV_DIR/bin/python" -m pip install --quiet setuptools 2>&1 | tail -n1
   "$VENV_DIR/bin/python" -m pip install --quiet "open-interpreter==0.4.3" 2>&1 | tail -n3
 fi
 ok "open-interpreter ready"
