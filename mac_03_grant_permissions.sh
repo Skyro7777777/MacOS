@@ -140,15 +140,21 @@ PYEOF
 
 # --- 5. run Open Interpreter ------------------------------------------------
 log "launching Open Interpreter with multi-step permission task"
-"$VENV_DIR/bin/python" "$OI_SCRIPT" 2>&1 | while IFS= read -r line; do
-  # filter out verbose OI output, keep important lines
-  if echo "$line" | grep -qE "\[oi\]|vision|Configure|toggle|password|Later|Allow|ERROR|click|System Settings|RustDesk"; then
-    log "  $line"
-  fi
-done
-
+# CRITICAL: do NOT filter the output — we need to see ALL errors.
+# Open Interpreter's error messages are essential for debugging.
+# Write full output to a log file AND print it (unfiltered).
+OI_LOG="/tmp/apple-project/oi-output.log"
+"$VENV_DIR/bin/python" "$OI_SCRIPT" 2>&1 | tee "$OI_LOG"
 OI_EXIT=${PIPESTATUS[0]}
 log "Open Interpreter exited with code $OI_EXIT"
+
+# show the last 30 lines of OI output for debugging
+if [ "$OI_EXIT" -ne 0 ]; then
+  warn "Open Interpreter failed — last 30 lines of output:"
+  tail -n 30 "$OI_LOG" 2>/dev/null | while IFS= read -r line; do
+    warn "  $line"
+  done
+fi
 
 # --- 6. final state ---------------------------------------------------------
 take_screenshot "03_final_state"
