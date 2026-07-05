@@ -205,7 +205,7 @@ on findSwitchForApp(theElement, appName)
             set elemRole to role of theElement
         on error
             set elemRole to ""
-        end if
+        end try
         if elemRole is in {"AXGroup", "AXRow", "AXOutlineRow", "AXLayoutArea", "AXSplitGroup"} then
             set foundSwitch to missing value
             set foundText to false
