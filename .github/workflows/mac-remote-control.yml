@@ -26,6 +26,10 @@ on:
         description: "Minutes to keep the runner alive for remote control (max 240)"
         required: true
         default: "120"
+      use_showui:
+        description: "Force the ShowUI-2B AI path even if osascript succeeds (true/false)"
+        required: false
+        default: "false"
 
 # Cancel is intentionally NOT enabled — a running session is a real desktop
 # someone may be driving.  Only the timeout-minutes cap protects against orphans.
@@ -36,7 +40,7 @@ concurrency:
 jobs:
   mac-remote:
     runs-on: macos-15
-    timeout-minutes: ${{ fromJSON(github.event.inputs.hold_minutes || '120') }}
+    timeout-minutes: 240
     env:
       # Secrets
       TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
@@ -44,6 +48,7 @@ jobs:
       MAC_USER: ${{ secrets.MAC_USER }}
       MAC_USER_PASSWORD: ${{ secrets.MAC_USER_PASSWORD }}
       # Inputs
+      USE_SHOWUI: ${{ github.event.inputs.use_showui || 'false' }}
       HOLD_MINUTES: ${{ github.event.inputs.hold_minutes || '120' }}
       # Make everything non-interactive
       HOMEBREW_NO_AUTO_UPDATE: "1"
@@ -58,11 +63,6 @@ jobs:
       - name: 00 — Create helper admin user (known password)
         run: bash mac_00_setup_user.sh
 
-      - name: Setup Python 3.12 (for moondream2 — PyTorch doesn't support 3.14)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
       - name: 01 — Install & connect Tailscale (.pkg, no relay needed afterwards)
         run: bash mac_01_install_tailscale.sh
 
@@ -75,27 +75,13 @@ jobs:
       - name: 04 — Launch RustDesk in the GUI session & verify port 21118
         run: bash mac_04_start_rustdesk.sh
 
-      - name: Upload screenshots artifact (reality check)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: mac-runner-screenshots
-          path: /tmp/apple-project/screenshots/
-          if-no-files-found: warn
-          retention-days: 7
-
       - name: 05 — Hold session open & print connection info
         run: bash mac_05_hold_session.sh
 
       - name: Always — tear down Tailscale node
         if: always()
         run: |
-          # Order matters: logout FIRST (while daemon is alive to reach the
-          # socket), then stop the brew service.
           if command -v tailscale >/dev/null 2>&1; then
             sudo tailscale logout 2>/dev/null || true
             sudo tailscale down 2>/dev/null || true
-          fi
-          if command -v brew >/dev/null 2>&1; then
-            sudo brew services stop tailscale 2>/dev/null || true
           fi
