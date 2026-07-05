@@ -1,30 +1,24 @@
 #!/usr/bin/env python3
 """
  =============================================================================
-  mac_vision_agent.py  —  AI agent using Apple Vision OCR + OmniParser YOLO
-  for finding and clicking UI elements by text.
+  mac_vision_agent.py  —  AI agent using Apple Vision OCR + osascript AX
+  for finding and clicking UI elements.
 
-  This is a HYBRID AI approach:
-    - Apple Vision OCR (built-in neural network, zero download) finds text labels
-    - OmniParser YOLO (40 MB AI model) detects clickable UI elements
-    - osascript AX handles native macOS elements (System Settings, SecurityAgent)
-
-  WHY THIS IS BETTER than moondream2 / ShowUI-2B:
-    - moondream2 (1.86B VLM) hallucinated coordinates — too small for precision
-    - ShowUI-2B (2B VLM) OOM'd on 7.93 GiB MPS
-    - OCR gives EXACT text + EXACT coordinates — can't hallucinate
-    - YOLO gives bounding boxes of ALL clickable elements — can't guess wrong
-    - Together: find the "Configure" button by its TEXT, click its EXACT center
+  KEY INSIGHT from debugging:
+    OCR finds TEXT, but text positions ≠ button positions. The "Allow" text
+    in the dialog title is at y=217, but the "Allow" BUTTON is at y~380.
+    We must find the BUTTON (via osascript AX or by clicking BELOW the text),
+    not just click on any text matching "Allow".
 
   The flow:
-    1. Take screenshot (5-key plist fix prevents bash dialog)
-    2. Dismiss "find devices on local networks" dialog (OCR finds "Allow" text)
-    3. OCR finds "Configure" text → click its exact center
-    4. System Settings opens → osascript AX finds RustDesk's toggle → click
-    5. SecurityAgent prompt → osascript AX finds password field → type password
-    6. osascript AX clicks "Later"
-
-  REQUIRES: pyobjc-framework-Vision, Pillow, ultralytics (for YOLO), cliclick
+    1. Take screenshot
+    2. Dismiss "find devices on local networks" dialog:
+       a. Try osascript AX to click the "Allow" BUTTON
+       b. If that fails, use cliclick to click BELOW the "Allow" text (where buttons are)
+       c. VERIFY the dialog is gone (re-screenshot, check if "Allow" text still there)
+    3. Find "Configure" via OCR → click → VERIFY System Settings shows "RustDesk" text
+    4. AX toggle → AX password → AX Later
+    5. Only report SUCCESS if at least one toggle was actually CLICKED (not NOT_FOUND)
  =============================================================================
 """
 from __future__ import annotations
@@ -45,23 +39,16 @@ SHOTS_DIR.mkdir(parents=True, exist_ok=True)
 def log(msg: str) -> None:
     print(f"    [vision] {msg}", flush=True)
 
-
 def ok(msg: str) -> None:
     print(f"    [vision][ OK ] {msg}", flush=True)
 
-
 def warn(msg: str) -> None:
     print(f"    [vision][WARN] {msg}", flush=True)
-
 
 def die(msg: str) -> None:
     print(f"    [vision][FAIL] {msg}", flush=True)
     sys.exit(1)
 
-
-# ============================================================================
-#  screen + input helpers (shell-out for TCC inheritance)
-# ============================================================================
 
 def screenshot(path: str | None = None) -> str:
     if path is None:
@@ -86,12 +73,19 @@ def press_return() -> None:
     time.sleep(0.5)
 
 
+def is_process_running(name: str) -> bool:
+    result = subprocess.run(
+        ["osascript", "-e",
+         f'tell application "System Events" to return (count of (every process whose name is "{name}")) > 0'],
+        capture_output=True, text=True)
+    return result.returncode == 0 and "true" in result.stdout.lower()
+
+
 # ============================================================================
-#  Apple Vision OCR (built-in macOS neural network — zero download)
+#  Apple Vision OCR
 # ============================================================================
 
 def ocr_screenshot(img_path: str) -> list[tuple[str, int, int, int, int]]:
-    """Run macOS Vision OCR. Returns [(text, x1, y1, x2, y2), ...] in pixel coords."""
     try:
         from Vision import VNRecognizeTextRequest, VNImageRequestHandler
         from Foundation import NSURL
@@ -102,7 +96,7 @@ def ocr_screenshot(img_path: str) -> list[tuple[str, int, int, int, int]]:
 
     url = NSURL.fileURLWithPath_(img_path)
     request = VNRecognizeTextRequest.alloc().init()
-    request.setRecognitionLevel_(1)  # accurate
+    request.setRecognitionLevel_(1)
     request.setRecognitionLanguages_(["en-US"])
 
     handler = VNImageRequestHandler.alloc().initWithURL_options_(url, None)
@@ -132,84 +126,132 @@ def ocr_screenshot(img_path: str) -> list[tuple[str, int, int, int, int]]:
     return boxes
 
 
-def find_text_on_screen(target: str, img_path: str | None = None) -> tuple[int, int] | None:
-    """Find target text on screen via OCR. Returns (cx, cy) center of the text, or None."""
+def find_text_on_screen(target: str, img_path: str | None = None) -> tuple[int, int, int, int, int] | None:
+    """Find target text via OCR. Returns (text, x1, y1, x2, y2) or None."""
     if img_path is None:
         img_path = screenshot()
     boxes = ocr_screenshot(img_path)
     target_lower = target.lower()
     for text, x1, y1, x2, y2 in boxes:
         if target_lower in text.lower():
-            cx = (x1 + x2) // 2
-            cy = (y1 + y2) // 2
-            log(f"  OCR found '{text.strip()}' at ({x1},{y1})-({x2},{y2}), center=({cx},{cy})")
-            return (cx, cy)
+            log(f"  OCR found '{text.strip()[:50]}' at ({x1},{y1})-({x2},{y2})")
+            return (text, x1, y1, x2, y2)
     log(f"  OCR did not find '{target}' in {len(boxes)} text boxes")
     return None
 
 
 def find_and_click(target: str, wait: float = 2.0) -> bool:
     """Find target text via OCR and click its center."""
-    pt = find_text_on_screen(target)
-    if not pt:
+    result = find_text_on_screen(target)
+    if not result:
         return False
-    log(f"  clicking '{target}' at {pt}")
-    click_at(*pt)
+    _, x1, y1, x2, y2 = result
+    cx = (x1 + x2) // 2
+    cy = (y1 + y2) // 2
+    log(f"  clicking '{target}' at ({cx},{cy})")
+    click_at(cx, cy)
     time.sleep(wait)
     return True
 
 
 # ============================================================================
-#  osascript AX helpers (for native macOS elements)
+#  dialog dismissal — click the BUTTON, not the text
 # ============================================================================
 
-def is_process_running(name: str) -> bool:
-    result = subprocess.run(
+def dismiss_network_dialog() -> bool:
+    """Dismiss 'Allow RustDesk to find devices on local networks?' dialog.
+
+    The 'Allow' text in the dialog title is at y~217, but the 'Allow' BUTTON
+    is at the BOTTOM of the dialog (~y380). We need to click the button, not
+    the title text.
+
+    Strategy:
+    1. Try osascript AX to click a button named 'Allow' (works on macOS < 15.4)
+    2. If that fails, use cliclick to click BELOW the dialog text where buttons are
+    3. VERIFY the dialog is gone by re-screenshotting and checking for the text
+    """
+    log("checking for 'find devices on local networks' dialog...")
+
+    # Check if the dialog is present (look for "find devices" or "local networks" text)
+    shot = screenshot()
+    dialog_text = find_text_on_screen("local networks", shot)
+    if not dialog_text:
+        dialog_text = find_text_on_screen("find devices", shot)
+    if not dialog_text:
+        log("  no network dialog found")
+        return True  # dialog not present — nothing to dismiss
+
+    _, x1, y1, x2, y2 = dialog_text
+    log(f"  network dialog detected at ({x1},{y1})-({x2},{y2})")
+
+    # Method 1: try osascript AX to click the "Allow" button
+    log("  trying osascript AX to click 'Allow' button...")
+    ax_result = subprocess.run(
         ["osascript", "-e",
-         f'tell application "System Events" to return (count of (every process whose name is "{name}")) > 0'],
-        capture_output=True, text=True
-    )
-    return result.returncode == 0 and "true" in result.stdout.lower()
+         '''tell application "System Events"
+  try
+    repeat with p in (every process whose background only is false)
+      repeat with w in (windows of p)
+        repeat with b in (every button of w)
+          try
+            set bName to name of b as text
+            if bName starts with "Allow" then
+              click b
+              return "CLICKED:" & bName
+            end if
+          end try
+        end repeat
+      end repeat
+    end repeat
+  end try
+  return "NOT_FOUND"
+end tell'''],
+        capture_output=True, text=True)
+    ax_output = ax_result.stdout.strip()
+    if "CLICKED" in ax_output:
+        ok(f"  AX clicked: {ax_output}")
+        time.sleep(2)
+    else:
+        # Method 2: cliclick — click BELOW the dialog text where buttons are
+        # Dialog buttons are typically 150-200px below the dialog title text
+        # The dialog is centered horizontally (~x512 on 1024px screen)
+        # "Allow" is the RIGHT button, "Don't Allow" is the LEFT button
+        button_y = y2 + 160  # 160px below the bottom of the dialog text
+        allow_x = 612  # right button (Allow)
+        log(f"  AX failed — trying cliclick at button position ({allow_x},{button_y})")
+        click_at(allow_x, button_y)
+        time.sleep(2)
 
-
-def ax_run_script(script_path: str, *args: str) -> str:
-    """Run an AppleScript file with arguments."""
-    cmd = ["osascript", script_path] + list(args)
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    return result.stdout.strip() if result.returncode == 0 else result.stderr.strip()
+    # VERIFY: is the dialog gone?
+    shot2 = screenshot()
+    still_there = find_text_on_screen("local networks", shot2)
+    if still_there:
+        # try clicking "Don't Allow" instead (left button) to at least dismiss it
+        dont_allow_x = 412  # left button (Don't Allow)
+        button_y = y2 + 160
+        log(f"  dialog still present — trying 'Don't Allow' at ({dont_allow_x},{button_y})")
+        click_at(dont_allow_x, button_y)
+        time.sleep(2)
+        shot3 = screenshot()
+        if find_text_on_screen("local networks", shot3):
+            warn("  WARNING: network dialog still present after all attempts")
+            return False
+        else:
+            ok("  network dialog dismissed (via Don't Allow)")
+            return True
+    else:
+        ok("  network dialog dismissed")
+        return True
 
 
 # ============================================================================
 #  the permission-granting flow
 # ============================================================================
 
-def dismiss_network_dialog() -> bool:
-    """Dismiss 'Allow RustDesk to find devices on local networks?' by finding
-    'Allow' text via OCR and clicking it."""
-    log("checking for 'find devices on local networks' dialog...")
-    pt = find_text_on_screen("Allow")
-    if pt:
-        log(f"  found 'Allow' text — clicking to dismiss network dialog")
-        click_at(*pt)
-        time.sleep(2)
-        return True
-    # also try osascript
-    subprocess.run(["osascript", "-e",
-        'tell application "System Events"\ntry\nrepeat with p in (every process whose background only is false)\nrepeat with w in (windows of p)\nrepeat with b in (every button of w)\ntry\nif (name of b as text) starts with "Allow" then\nclick b\nreturn\nend if\nend try\nend repeat\nend repeat\nend repeat\nend try\nend tell'],
-        capture_output=True, text=True)
-    return False
-
-
 def grant_permissions() -> bool:
     log("starting permission flow (OCR + AX hybrid)")
 
-    # Write AX scripts to temp files
-    toggle_script = "/tmp/ax_toggle.scpt"
-    password_script = "/tmp/ax_password.scpt"
-    later_script = "/tmp/ax_later.scpt"
-
-    # ... (scripts written by the shell wrapper, or write them here)
-    # For simplicity, use inline osascript calls
+    toggles_clicked = 0
 
     for cycle in range(1, MAX_CYCLES + 1):
         log(f"=== cycle {cycle}/{MAX_CYCLES} ===")
@@ -218,35 +260,41 @@ def grant_permissions() -> bool:
         subprocess.run(["open", "-a", "RustDesk"], check=False)
         time.sleep(3)
 
-        # 2. dismiss network dialog if present
+        # 2. dismiss network dialog (with verification)
         dismiss_network_dialog()
         time.sleep(1)
 
         # 3. find "Configure" via OCR and click it
         log("looking for 'Configure' button via OCR...")
-        if not find_and_click("Configure", wait=4.0):
-            # try alternative text
-            if not find_and_click("configure", wait=2.0):
-                log("no 'Configure' button found — permissions may be done")
-                return True
+        configure_result = find_text_on_screen("Configure")
+        if not configure_result:
+            log("no 'Configure' button found — permissions may be done")
+            continue
 
-        # 4. verify System Settings opened (check for a WINDOW, not just process)
-        log("waiting for System Settings window...")
-        ss_ready = False
-        for _ in range(10):
-            result = subprocess.run(
-                ["osascript", "-e",
-                 'tell application "System Events" to return (count of windows of (first process whose name is "System Settings"))'],
-                capture_output=True, text=True)
-            if result.returncode == 0 and result.stdout.strip() != "0":
-                ss_ready = True
+        _, cx1, cy1, cx2, cy2 = configure_result
+        configure_x = (cx1 + cx2) // 2
+        configure_y = (cy1 + cy2) // 2
+        log(f"  clicking 'Configure' at ({configure_x},{configure_y})")
+        click_at(configure_x, configure_y)
+        time.sleep(4)
+
+        # 4. VERIFY System Settings opened AND shows "RustDesk" text
+        #    (not just any window — must be the privacy pane with RustDesk listed)
+        log("verifying System Settings shows RustDesk in privacy pane...")
+        ss_verified = False
+        for attempt in range(15):
+            shot = screenshot()
+            # check if "RustDesk" text appears in System Settings
+            rustdesk_in_ss = find_text_on_screen("RustDesk", shot)
+            if rustdesk_in_ss:
+                ss_verified = True
+                ok("  System Settings shows RustDesk in the privacy pane")
                 break
             time.sleep(1)
 
-        if not ss_ready:
-            log("System Settings did not open — Configure click may have missed")
+        if not ss_verified:
+            warn("  System Settings does NOT show RustDesk — Configure click may have missed")
             continue
-        ok("  System Settings opened")
 
         # 5. find + click the toggle next to RustDesk via AX
         log("finding RustDesk's toggle via AX...")
@@ -315,14 +363,17 @@ on findSwitchForApp(theElement, appName)
   end tell
 end findSwitchForApp'''],
             capture_output=True, text=True)
-        toggle_result_str = toggle_result.stdout.strip() if toggle_result.returncode == 0 else toggle_result.stderr.strip()
-        if "CLICKED" in toggle_result_str or "ALREADY_ON" in toggle_result_str:
-            ok(f"  AX toggle: {toggle_result_str}")
+        toggle_str = toggle_result.stdout.strip() if toggle_result.returncode == 0 else toggle_result.stderr.strip()
+        if "CLICKED" in toggle_str:
+            ok(f"  AX toggle: {toggle_str}")
+            toggles_clicked += 1
+        elif "ALREADY_ON" in toggle_str:
+            ok(f"  AX toggle: {toggle_str}")
         else:
-            warn(f"  AX toggle: {toggle_result_str}")
+            warn(f"  AX toggle: {toggle_str}")
         time.sleep(3)
 
-        # 6. type password via AX (SecurityAgent)
+        # 6. type password via AX
         log("typing password via AX...")
         pw_result = subprocess.run(
             ["osascript", "-e",
@@ -358,11 +409,11 @@ end findSwitchForApp'''],
   end tell
 end run'''],
             capture_output=True, text=True)
-        pw_result_str = pw_result.stdout.strip() if pw_result.returncode == 0 else pw_result.stderr.strip()
-        if "TYPED" in pw_result_str:
+        pw_str = pw_result.stdout.strip() if pw_result.returncode == 0 else pw_result.stderr.strip()
+        if "TYPED" in pw_str:
             ok("  AX password: typed")
         else:
-            warn(f"  AX password: {pw_result_str}")
+            warn(f"  AX password: {pw_str}")
         time.sleep(3)
 
         # 7. click "Later" via AX
@@ -387,20 +438,20 @@ end run'''],
   return "NOT_FOUND"
 end tell'''],
             capture_output=True, text=True)
-        later_result_str = later_result.stdout.strip() if later_result.returncode == 0 else later_result.stderr.strip()
-        if "CLICKED" in later_result_str:
+        later_str = later_result.stdout.strip() if later_result.returncode == 0 else later_result.stderr.strip()
+        if "CLICKED" in later_str:
             ok("  AX Later: clicked")
         else:
-            warn(f"  AX Later: {later_result_str}")
+            warn(f"  AX Later: {later_str}")
         time.sleep(2)
 
-    # Final check
-    if is_process_running("SecurityAgent"):
-        warn("SecurityAgent still running — permissions may not be granted")
+    # FINAL VERIFICATION: only report success if at least one toggle was clicked
+    if toggles_clicked > 0:
+        ok(f"permission flow complete — {toggles_clicked} toggle(s) clicked")
+        return True
+    else:
+        warn("permission flow complete — NO toggles were clicked (permissions NOT granted)")
         return False
-
-    ok("permission flow complete")
-    return True
 
 
 def main() -> int:
@@ -411,9 +462,9 @@ def main() -> int:
 
     success = grant_permissions()
     if success:
-        ok("SUCCESS — all permissions appear granted")
+        ok("SUCCESS — permissions appear granted")
         return 0
-    die("could not grant all permissions")
+    die("FAILED — permissions were NOT granted")
     return 1
 
 
