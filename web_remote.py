@@ -53,32 +53,54 @@ def type_password_at(password: str, x: int, y: int) -> None:
     """Click at (x,y) to focus the password field, clear it, type password, press Return."""
     subprocess.run(["cliclick", f"c:{x},{y}"], capture_output=True)
     time.sleep(0.5)
-    subprocess.run(["cliclick", "kp:cmd+a"], capture_output=True)
+    # Clear field: Cmd+A then Delete
+    subprocess.run(["osascript", "-e", 'tell application "System Events" to keystroke "a" using {command down}'], capture_output=True)
     time.sleep(0.1)
-    subprocess.run(["cliclick", "kp:delete"], capture_output=True)
+    subprocess.run(["osascript", "-e", 'tell application "System Events" to key code 51'], capture_output=True)  # delete
     time.sleep(0.1)
+    # Type password
     subprocess.run(["cliclick", f"t:{password}"], capture_output=True)
     time.sleep(0.3)
-    subprocess.run(["cliclick", "kp:return"], capture_output=True)
+    # Press Return
+    subprocess.run(["osascript", "-e", 'tell application "System Events" to key code 36'], capture_output=True)  # return
     time.sleep(0.5)
 
 
 def press_key(key: str) -> None:
-    key_map = {
-        "return": "return",
-        "tab": "tab",
-        "escape": "escape",
-        "space": "space",
-        "delete": "delete",
-        "cmd_g": "cmd+shift+g",
-        "cmd_a": "cmd+a",
-        "cmd_c": "cmd+c",
-        "cmd_v": "cmd+v",
-        "cmd_w": "cmd+w",
-        "cmd_q": "cmd+q",
+    """Press a key using osascript (reliable on macOS)."""
+    # osascript key codes:
+    #   return = 36, tab = 48, escape = 53, delete = 51, space = 49
+    #   enter = 76, up=126, down=125, left=123, right=124
+    key_codes = {
+        "return": "36",
+        "enter": "76",
+        "tab": "48",
+        "escape": "53",
+        "delete": "51",   # backspace
+        "space": "49",
+        "up": "126",
+        "down": "125",
+        "left": "123",
+        "right": "124",
     }
-    cliclick_key = key_map.get(key, key)
-    subprocess.run(["cliclick", f"kp:{cliclick_key}"], capture_output=True)
+    key_combos = {
+        "cmd_g": 'keystroke "g" using {command down, shift down}',
+        "cmd_a": 'keystroke "a" using {command down}',
+        "cmd_c": 'keystroke "c" using {command down}',
+        "cmd_v": 'keystroke "v" using {command down}',
+        "cmd_w": 'keystroke "w" using {command down}',
+        "cmd_q": 'keystroke "q" using {command down}',
+    }
+
+    if key in key_codes:
+        # Use key code (more reliable for special keys like Return, Delete)
+        script = f'tell application "System Events" to key code {key_codes[key]}'
+    elif key in key_combos:
+        script = f'tell application "System Events" to {key_combos[key]}'
+    else:
+        script = f'tell application "System Events" to keystroke "{key}"'
+
+    subprocess.run(["osascript", "-e", script], capture_output=True)
     time.sleep(0.3)
 
 
@@ -131,6 +153,8 @@ HTML_PAGE = """<!DOCTYPE html>
         <button onclick="doKey('escape')">Esc</button>
         <button onclick="doKey('delete')">⌫</button>
         <button onclick="doKey('cmd_g')">⌘⇧G</button>
+        <button onclick="doKey('cmd_a')">⌘A</button>
+        <button onclick="doKey('cmd_c')">⌘C</button>
         <button onclick="doKey('cmd_v')">⌘V</button>
         <span style="color:#555;margin:0 5px">|</span>
         <label style="color:#ff0">PW X:</label>
