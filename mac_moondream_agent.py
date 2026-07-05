@@ -148,7 +148,29 @@ def load_model():
         dtype = torch.float32
     log(f"device={_device} dtype={dtype}")
 
-    log(f"loading {MODEL_ID} (rev={MODEL_REV}) ...")
+    # CRITICAL: pre-download the model with EXPLICIT progress logging BEFORE
+    # from_pretrained. Without this, the 3.59 GiB download happens silently
+    # inside from_pretrained — the tqdm progress bar is hidden in CI (non-TTY
+    # shells don't render \r animation), so it looks like the script is hung
+    # for 5+ minutes. By calling snapshot_download first, we get visible
+    # "downloading model.safetensors: 45%" lines in the GHA log.
+    import os
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "0")
+    os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
+    try:
+        from huggingface_hub import snapshot_download
+        log(f"pre-downloading {MODEL_ID} (rev={MODEL_REV}, ~3.7 GB) with progress...")
+        log("  (if this seems stuck, it's downloading — watch for progress bars below)")
+        snapshot_download(
+            repo_id=MODEL_ID,
+            revision=MODEL_REV,
+            repo_type="model",
+        )
+        log("snapshot cached — now loading from cache (should be ~15s)")
+    except Exception as e:
+        log(f"  (snapshot_download failed: {e} — will try from_pretrained directly)")
+
+    log(f"loading {MODEL_ID} (rev={MODEL_REV}) from cache ...")
     # CRITICAL: on MPS, do NOT use device_map — transformers 4.56.1's
     # caching_allocator_warmup tries to allocate the full model (3.59 GiB)
     # as a SINGLE torch.empty buffer, which hits Metal's 4 GiB per-buffer

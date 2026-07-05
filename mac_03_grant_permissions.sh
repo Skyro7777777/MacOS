@@ -91,8 +91,29 @@ if ! "$VENV_DIR/bin/python" -c "import accelerate, einops, pyvips" 2>/dev/null; 
 fi
 ok "venv ready: $($VENV_DIR/bin/python -c 'import torch, transformers; print(f"torch {torch.__version__}, transformers {transformers.__version__}")')"
 
+# --- 3b. pre-download the moondream2 model with VISIBLE progress -------------
+# Without this, the 3.7 GB download happens silently inside from_pretrained —
+# the tqdm progress bar is hidden in CI (non-TTY shells don't render \r
+# animation), so it looks like the script is hung for 5+ minutes.
+# Pre-downloading with huggingface_hub shows progress in the GHA log.
+log "pre-downloading moondream2 model (~3.7 GB) with progress bars..."
+HF_HUB_DISABLE_PROGRESS_BARS=0 HF_HUB_ENABLE_HF_TRANSFER=0 \
+"$VENV_DIR/bin/python" -c "
+from huggingface_hub import snapshot_download
+import sys
+print('  downloading vikhyatk/moondream2 (rev=2025-06-21)...', flush=True)
+print('  (if this seems stuck, it IS downloading — watch for progress bars)', flush=True)
+snapshot_download(
+    repo_id='vikhyatk/moondream2',
+    revision='2025-06-21',
+    repo_type='model',
+)
+print('  model cached successfully', flush=True)
+" 2>&1 | while IFS= read -r line; do log "  $line"; done
+ok "moondream2 model pre-downloaded"
+
 # --- 4. launch the moondream2 agent -----------------------------------------
-log "launching moondream2 agent (model downloads on first run, ~3.7 GB)"
+log "launching moondream2 agent (model loads from cache, ~15s)"
 MOONDREAM_PASSWORD="$MAC_USER_PASSWORD" \
 MOONDREAM_MAX_STEPS="30" \
 "$VENV_DIR/bin/python" "$PROJECT_ROOT/mac_moondream_agent.py" || {
