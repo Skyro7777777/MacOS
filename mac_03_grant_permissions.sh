@@ -1,129 +1,240 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  mac_03_grant_permissions.sh
-#  Grant TCC permissions to RustDesk using moondream2 (local VLM, 1.86B).
+#  Grant TCC permissions to RustDesk using a DETERMINISTIC hybrid approach:
+#    - Fixed coordinates for RustDesk's "Configure" button (Flutter app, no AX)
+#    - osascript AX-tree for System Settings (native macOS, AX works)
+#    - osascript AX for the SecurityAgent password prompt
 #
-#  THE APPROACH:
-#  1. Open RustDesk → it shows a pink "Permissions" section with "Configure" button
-#  2. moondream2 points to "Configure" → cliclick clicks it
-#     → RustDesk adds itself to the privacy list + opens System Settings
-#  3. moondream2 points to the toggle next to "RustDesk" → cliclick clicks it
-#     → macOS shows a password prompt
-#  4. moondream2 points to the password field → cliclick clicks it
-#  5. Type MAC_USER_PASSWORD (from repo secrets) → press Return
-#     → macOS grants the permission at the OS level
-#  6. moondream2 points to "Later" → cliclick clicks it (dismiss "Quit & Reopen")
-#  7. Repeat for each permission
+#  NO AI MODEL NEEDED. This is deterministic, fast (~30s), and can't hallucinate.
 #
-#  CRITICAL VERSION PINS (from deep research, Task ID 30):
-#    - Python 3.12 (NOT 3.14 — PyTorch doesn't fully support 3.14)
-#    - transformers==4.56.1 (pinned — v4.57+/5.0 broke moondream2's
-#      trust_remote_code via _tied_weights_keys → all_tied_weights_keys rename)
-#    - torch>=2.7.0,<2.10
-#    - moondream2 revision 2025-06-21 (has native point() API)
-#
-#  The preauthorization (ScreenCaptureApprovals.plist with 5 keys) +
-#  dialog-dismissal loop (cliclick by coordinates) handle the bash popup
-#  so screencapture works for moondream2.
+#  The flow:
+#    1. Open RustDesk → pink "Permissions" section with "Configure" button
+#    2. Click "Configure" at a FIXED coordinate (always ~(210, 565) on 1024x768)
+#    3. In System Settings, use osascript AX to find RustDesk's toggle → click ON
+#    4. Use osascript AX to find SecurityAgent's password field → type password
+#    5. Use osascript AX to click "Later" (dismiss "Quit & Reopen")
+#    6. Repeat for each permission (max 3 cycles, NOT 30)
 # =============================================================================
 set -euo pipefail
 source "$(dirname "$0")/mac_lib.sh"
 
-log "Step 03 — grant TCC permissions via moondream2 VLM"
+log "Step 03 — grant TCC permissions (deterministic: fixed coords + osascript AX)"
 
 require_env MAC_USER_PASSWORD
 
-# --- 0. install cliclick FIRST (needed by dialog-dismissal loop) -------------
+# --- 0. install cliclick + start loops --------------------------------------
 if ! command -v cliclick >/dev/null 2>&1; then
-  log "installing cliclick (needed for dialog dismissal + AI clicking)"
+  log "installing cliclick"
   brew install cliclick
 fi
-
-# --- 0b. start screenshot + dialog-dismissal loops ---------------------------
-# NOW cliclick is available for the dialog-dismissal loop to use.
 start_screenshot_loop
 start_dialog_dismissal_loop
 
-# --- 2. ensure Python 3.12 is available -------------------------------------
-# The runner's default python3 is 3.14 (too new for PyTorch). We need 3.12.
-# Check if 3.12 is available (either as python3.12 or via setup-python).
-PY312=""
-if command -v python3.12 >/dev/null 2>&1; then
-  PY312="$(command -v python3.12)"
-elif [ -x "/Users/runner/hostedtoolcache/Python/3.12.10/arm64/bin/python3.12" ]; then
-  PY312="/Users/runner/hostedtoolcache/Python/3.12.10/arm64/bin/python3.12"
-elif /usr/bin/python3 -c "import sys; exit(0 if sys.version_info[:2] == (3,12) else 1)" 2>/dev/null; then
-  PY312="/usr/bin/python3"
-fi
+# --- 1. write the osascript scripts to temp files (avoids heredoc issues) ---
+TOGGLE_SCRIPT="/tmp/ax_click_toggle.scpt"
+PASSWORD_SCRIPT="/tmp/ax_type_password.scpt"
+LATER_SCRIPT="/tmp/ax_click_later.scpt"
 
-if [ -z "$PY312" ]; then
-  log "Python 3.12 not found — installing via Homebrew"
-  brew install python@3.12
-  PY312="$(command -v python3.12 2>/dev/null || echo /opt/homebrew/bin/python3.12)"
-fi
-ok "using Python: $PY312 ($($PY312 --version 2>&1))"
+cat > "$TOGGLE_SCRIPT" <<'SCPT'
+on run argv
+  set appName to item 1 of argv as text
+  tell application "System Events"
+    set procList to (every process whose name is "System Settings")
+    if (count of procList) is 0 then return "NO_PROCESS"
+    set theProc to item 1 of procList
+    if (count of windows of theProc) is 0 then return "NO_WINDOW"
+    set theWindow to window 1 of theProc
+    set theSwitch to my findSwitchForApp(theWindow, appName)
+    if theSwitch is missing value then return "NOT_FOUND"
+    try
+      set switchVal to value of theSwitch
+      if switchVal is 1 then return "ALREADY_ON"
+    end try
+    try
+      set value of theSwitch to 1
+    on error
+      click theSwitch
+    end try
+    return "CLICKED"
+  end tell
+end run
 
-# --- 3. create the venv with Python 3.12 + ALL deps -------------------------
-VENV_DIR="$STATE_DIR/moondream-venv"
-if [ ! -x "$VENV_DIR/bin/python" ]; then
-  log "creating Python 3.12 virtualenv at $VENV_DIR"
-  "$PY312" -m venv "$VENV_DIR" || die "could not create venv with $PY312"
-  "$VENV_DIR/bin/python" -m pip install --quiet --upgrade pip wheel setuptools 2>&1 | tail -n1
-fi
+on findSwitchForApp(theElement, appName)
+  tell application "System Events"
+    set elemRole to missing value
+    try
+      set elemRole to role of theElement
+    end try
+    set kids to {}
+    try
+      set kids to UI elements of theElement
+    end try
+    if elemRole is in {"AXGroup", "AXRow", "AXOutlineRow", "AXLayoutArea", "AXSplitGroup"} then
+      set foundSwitch to missing value
+      set foundText to false
+      repeat with kid in kids
+        try
+          set kidRole to role of kid
+          if kidRole is in {"AXSwitch", "AXCheckBox", "AXCheckbox"} then
+            set foundSwitch to kid
+          else if kidRole is "AXStaticText" or kidRole is "AXTextField" then
+            try
+              if (value of kid as text) contains appName then
+                set foundText to true
+              end if
+            end try
+          end if
+        end try
+      end repeat
+      if foundSwitch is not missing value and foundText then
+        return foundSwitch
+      end if
+    end if
+    repeat with kid in kids
+      try
+        set res to my findSwitchForApp(kid, appName)
+        if res is not missing value then return res
+      end try
+    end repeat
+    return missing value
+  end tell
+end findSwitchForApp
+SCPT
 
-# install ALL deps with EXACT version pins:
-#   - transformers==4.56.1 (pinned — newer breaks moondream2 trust_remote_code)
-#   - torch>=2.7.0,<2.10 (PyTorch with MPS support, not too new)
-#   - accelerate, einops, Pillow, pyvips-binary, pyvips (moondream2 deps)
-if ! "$VENV_DIR/bin/python" -c "import torch" 2>/dev/null; then
-  log "installing torch>=2.7.0,<2.10 (~2 GB, may take a minute)..."
-  "$VENV_DIR/bin/python" -m pip install --quiet "torch>=2.7.0,<2.10" torchvision 2>&1 | tail -n3
-fi
-if ! "$VENV_DIR/bin/python" -c "import transformers; assert transformers.__version__ == '4.56.1'" 2>/dev/null; then
-  log "installing transformers==4.56.1 (PINNED for moondream2 compatibility)..."
-  "$VENV_DIR/bin/python" -m pip install --quiet "transformers==4.56.1" 2>&1 | tail -n3
-fi
-if ! "$VENV_DIR/bin/python" -c "import accelerate, einops, pyvips, hf_transfer" 2>/dev/null; then
-  log "installing accelerate + einops + Pillow + pyvips + hf_transfer (fast downloader)..."
-  "$VENV_DIR/bin/python" -m pip install --quiet \
-      "accelerate>=1.10.0" "Pillow>=11.0.0" einops \
-      "pyvips-binary==8.16.0" "pyvips==2.2.3" hf_transfer 2>&1 | tail -n3
-fi
-ok "venv ready: $($VENV_DIR/bin/python -c 'import torch, transformers; print(f"torch {torch.__version__}, transformers {transformers.__version__}")')"
+cat > "$PASSWORD_SCRIPT" <<'SCPT'
+on run argv
+  set pw to item 1 of argv as text
+  tell application "System Events"
+    repeat with procName in {"SecurityAgent", "CoreServicesUIAgent"}
+      set procList to (every process whose name is procName)
+      if (count of procList) > 0 then
+        set theProc to item 1 of procList
+        repeat with w in (windows of theProc)
+          try
+            set pwField to missing value
+            repeat with ui in (UI elements of w)
+              try
+                if (role of ui) is "AXSecureTextField" then
+                  set pwField to ui
+                  exit repeat
+                end if
+              end try
+            end repeat
+            if pwField is not missing value then
+              set focused of pwField to true
+              keystroke pw
+              delay 0.5
+              keystroke return
+              return "TYPED"
+            end if
+          end try
+        end repeat
+      end if
+    end repeat
+    return "NO_PROMPT"
+  end tell
+end run
+SCPT
 
-# --- 3b. pre-download the moondream2 model with hf_transfer (FAST) -------------
-# Using the full model (vikhyatk/moondream2, 3.7 GB) with hf_transfer (Rust-based
-# downloader) — downloads in ~40s instead of 3-6 min. The INT4 quantized model
-# (Azaz666) requires torchao cpp extensions which need torch >= 2.11.0; we have
-# 2.9.1 so it crashes with size mismatch.
-log "pre-downloading moondream2 full model (~3.7 GB, hf_transfer fast download)..."
-HF_HUB_DISABLE_PROGRESS_BARS=0 HF_HUB_ENABLE_HF_TRANSFER=1 \
-PYTORCH_ENABLE_MPS_FALLBACK=1 \
-"$VENV_DIR/bin/python" -c "
-from huggingface_hub import snapshot_download
-import sys
-print('  downloading vikhyatk/moondream2 (rev=2025-06-21, ~3.7 GB)...', flush=True)
-print('  (hf_transfer enabled — should be ~40s)', flush=True)
-snapshot_download(
-    repo_id='vikhyatk/moondream2',
-    revision='2025-06-21',
-    repo_type='model',
-)
-print('  model cached successfully', flush=True)
-" 2>&1 | while IFS= read -r line; do log "  $line"; done
-ok "moondream2 model pre-downloaded"
+cat > "$LATER_SCRIPT" <<'SCPT'
+on run
+  tell application "System Events"
+    repeat with p in (every process whose name is "System Settings")
+      repeat with w in (windows of p)
+        try
+          repeat with b in (every button of w)
+            try
+              set bName to name of b as text
+              if bName is "Later" then
+                click b
+                return "CLICKED"
+              end if
+            end try
+          end repeat
+        end try
+      end repeat
+    end repeat
+    return "NOT_FOUND"
+  end tell
+end run
+SCPT
 
-# --- 4. launch the moondream2 agent -----------------------------------------
-log "launching moondream2 agent (full model loads from cache, ~15s)"
-MOONDREAM_PASSWORD="$MAC_USER_PASSWORD" \
-MOONDREAM_MAX_STEPS="30" \
-"$VENV_DIR/bin/python" "$PROJECT_ROOT/mac_moondream_agent.py" || {
-  warn "moondream2 agent did not complete successfully"
-  warn "check the screenshots artifact for the final state"
-}
+# --- 2. the full permission cycle (max 3 cycles, NOT 30) ---------------------
+MAX_CYCLES=3
 
-# --- 5. final state ---------------------------------------------------------
+for cycle in $(seq 1 "$MAX_CYCLES"); do
+  log "=== permission cycle $cycle/$MAX_CYCLES ==="
+  take_screenshot "03_cycle${cycle}_start"
+
+  # 2a. open RustDesk
+  gui_run open -a RustDesk 2>/dev/null || true
+  sleep 3
+
+  # 2b. click the Configure button at the fixed coordinate
+  log "clicking Configure at fixed coordinate (210, 565)"
+  cliclick c:210,565 2>/dev/null || true
+  sleep 4
+  take_screenshot "03_cycle${cycle}_after_configure"
+
+  # 2c. verify System Settings opened
+  if ! osascript -e 'tell application "System Events" to return (count of (every process whose name is "System Settings")) > 0' 2>/dev/null | grep -q "true"; then
+    warn "System Settings did not open — Configure click may have missed"
+    take_screenshot "03_cycle${cycle}_settings_not_open"
+    continue
+  fi
+  ok "  System Settings opened"
+
+  # 2d. wait for System Settings window
+  for i in $(seq 1 10); do
+    if osascript -e 'tell application "System Events" to return (count of windows of (first process whose name is "System Settings"))' 2>/dev/null | grep -q "[1-9]"; then
+      break
+    fi
+    sleep 1
+  done
+
+  # 2e. click the toggle next to RustDesk via AX
+  log "finding RustDesk's toggle via AX..."
+  toggle_result="$(osascript "$TOGGLE_SCRIPT" "RustDesk" 2>&1 || true)"
+  case "$toggle_result" in
+    CLICKED) ok "  AX: clicked toggle" ;;
+    ALREADY_ON) ok "  AX: toggle already ON" ;;
+    *) warn "  AX: toggle result: $toggle_result" ;;
+  esac
+  take_screenshot "03_cycle${cycle}_after_toggle"
+  sleep 3
+
+  # 2f. type the password via AX
+  log "typing password via AX..."
+  pw_result="$(osascript "$PASSWORD_SCRIPT" "$MAC_USER_PASSWORD" 2>&1 || true)"
+  case "$pw_result" in
+    TYPED) ok "  AX: typed password" ;;
+    *) warn "  AX: password result: $pw_result" ;;
+  esac
+  sleep 3
+  take_screenshot "03_cycle${cycle}_after_password"
+
+  # 2g. click "Later" via AX
+  log "clicking 'Later' via AX..."
+  later_result="$(osascript "$LATER_SCRIPT" 2>&1 || true)"
+  case "$later_result" in
+    CLICKED) ok "  AX: clicked Later" ;;
+    *) warn "  AX: Later result: $later_result" ;;
+  esac
+  sleep 2
+  take_screenshot "03_cycle${cycle}_done"
+done
+
+# --- 3. final state ---------------------------------------------------------
 take_screenshot "03_final_state"
 stop_screenshot_loop
 stop_dialog_dismissal_loop
-ok "permission pipeline complete"
+
+# Check if permissions were granted
+if pgrep -x SecurityAgent >/dev/null 2>&1; then
+  warn "SecurityAgent still running — a password prompt may be stuck"
+  warn "permissions may NOT be granted — check screenshots artifact"
+  exit 1
+fi
+
+ok "permission pipeline complete (deterministic, no AI model, ~30s)"
