@@ -47,13 +47,19 @@ if ! pgrep -x ollama >/dev/null 2>&1; then
   sleep 5
 fi
 
-# pull llava:7b if not already pulled (~4.7 GB, visible progress)
-log "checking for llava:7b model..."
-if ! ollama list 2>/dev/null | grep -q "llava:7b"; then
-  log "pulling llava:7b model (~4.7 GB, visible progress)..."
-  ollama pull llava:7b
+# pull llama3.1:8b if not already pulled (~4.7 GB, visible progress)
+# Using llama3.1:8b instead of llava:7b because OI needs a CODING model
+# (llava is a vision model that can't write correct Python — it generated
+# '* = computer.*' which is invalid syntax, then gave up).
+# llama3.1:8b is much better at writing code + reasoning. We set
+# emit_images=False so OI sends text descriptions (via its internal OCR)
+# instead of images — the model doesn't need vision capability.
+log "checking for llama3.1:8b model..."
+if ! ollama list 2>/dev/null | grep -q "llama3.1:8b"; then
+  log "pulling llama3.1:8b model (~4.7 GB, visible progress)..."
+  ollama pull llama3.1:8b
 fi
-ok "ollama + llava:7b ready"
+ok "ollama + llama3.1:8b ready"
 
 # --- 2. install Open Interpreter --------------------------------------------
 # CRITICAL: create a FRESH venv every run. The venv cache was causing
@@ -126,16 +132,16 @@ from interpreter import interpreter
 interpreter.offline = True
 interpreter.auto_run = True          # CI: no confirmations needed
 interpreter.loop = True              # keep going until task is done
-interpreter.llm.model = "ollama/llava:7b"
+interpreter.llm.model = "ollama/llama3.1:8b"  # coding/reasoning model (NOT llava)
 interpreter.llm.api_base = "http://localhost:11434"
 interpreter.llm.api_key = "fake_key"  # required by litellm even for local
-interpreter.llm.supports_vision = True
+interpreter.llm.supports_vision = False  # llama3.1 is text-only — use OCR descriptions
 interpreter.llm.context_window = 8192
 interpreter.llm.max_tokens = 2000
 
 # Enable the computer API (screen capture + click + type)
 interpreter.computer.import_computer_api = True
-interpreter.computer.emit_images = True
+interpreter.computer.emit_images = False  # send TEXT descriptions (OCR), not images
 interpreter.computer.offline = True
 
 # CRITICAL: patch OI's display.screenshot to use the system 'screencapture'
@@ -162,7 +168,7 @@ try:
 except Exception as e:
     print(f"    [oi] display.screenshot patch skipped: {e}", flush=True)
 
-print("    [oi] Open Interpreter configured — local LLaVA 7B via Ollama", flush=True)
+print("    [oi] Open Interpreter configured — local Llama 3.1 8B via Ollama (text+OCR mode)", flush=True)
 print("    [oi] starting multi-step permission task...", flush=True)
 
 # The multi-step task prompt
