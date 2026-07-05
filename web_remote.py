@@ -120,6 +120,11 @@ HTML_PAGE = """<!DOCTYPE html>
         <button onclick="doKey('delete')">⌫</button>
         <button onclick="doKey('cmd_g')">⌘⇧G</button>
         <button onclick="doKey('cmd_v')">⌘V</button>
+        <span style="color:#555;margin:0 5px">|</span>
+        <button onclick="openPane('screen')">Screen Rec</button>
+        <button onclick="openPane('accessibility')">Accessibility</button>
+        <button onclick="openPane('input')">Input Mon</button>
+        <button onclick="openPane('full_disk')">Full Disk</button>
     </div>
     <div class="screenshot-wrap">
         <img id="screenshot" />
@@ -255,6 +260,16 @@ HTML_PAGE = """<!DOCTYPE html>
                 });
         }
 
+        function openPane(pane) {
+            setStatus('Opening ' + pane + ' settings...');
+            fetch('/open_pane?pane=' + pane)
+                .then(r => r.text())
+                .then(data => {
+                    setStatus('Opened: ' + data);
+                    setTimeout(refresh, 2000);
+                });
+        }
+
         // Initial load
         refresh();
     </script>
@@ -308,6 +323,24 @@ class RemoteHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
             self.wfile.write(f"key: {key}".encode())
+
+        elif self.path.startswith("/open_pane"):
+            params = parse_qs(urlparse(self.path).query)
+            pane = params.get("pane", [""])[0]
+            pane_urls = {
+                "screen": "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture",
+                "accessibility": "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility",
+                "input": "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ListenEvent",
+                "full_disk": "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles",
+            }
+            url = pane_urls.get(pane, "")
+            if url:
+                subprocess.run(["open", url], capture_output=True)
+                time.sleep(2)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(f"opened {pane}".encode())
 
         else:
             self.send_response(404)
