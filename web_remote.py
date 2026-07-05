@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
  =============================================================================
-  web_remote.py  —  Click-to-control web remote for macOS 15 GHA runner
+  web_remote.py v3 — Fixed for Windows 11 desktop mouse control
 
-  v2: Fixed mobile issues:
-  - Removed auto-refresh (was causing ghost clicks)
-  - Added explicit Right-Click toggle button
-  - Coordinates always visible
-  - Better mobile touch support
-  - Manual refresh only (button + after click)
+  v3 fixes:
+  - NO ghost clicks: mousemove ONLY updates coords, never clicks
+  - Coords persist: last-clicked coords stay visible until next click
+  - Click only on actual click event (not mousemove/touchmove)
+  - Added coordinate input: type exact x,y to click precisely
+  - Better desktop layout (no mobile touch hacks)
  =============================================================================
 """
 from __future__ import annotations
@@ -20,7 +20,6 @@ import subprocess
 import sys
 import time
 import base64
-from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
@@ -29,7 +28,6 @@ os.makedirs("/tmp/apple-project", exist_ok=True)
 
 
 def take_screenshot() -> str:
-    """Take a screenshot and return it as base64."""
     subprocess.run(["screencapture", "-x", "-C", SCREENSHOT_PATH],
                    capture_output=True, check=True)
     with open(SCREENSHOT_PATH, "rb") as f:
@@ -37,7 +35,6 @@ def take_screenshot() -> str:
 
 
 def click_at(x: int, y: int, button: str = "left") -> None:
-    """Click at (x, y) using cliclick."""
     if button == "right":
         subprocess.run(["cliclick", f"rc:{x},{y}"], capture_output=True)
     elif button == "double":
@@ -48,13 +45,11 @@ def click_at(x: int, y: int, button: str = "left") -> None:
 
 
 def type_text(text: str) -> None:
-    """Type text using cliclick."""
     subprocess.run(["cliclick", f"t:{text}"], capture_output=True)
     time.sleep(0.3)
 
 
 def press_key(key: str) -> None:
-    """Press a key combo using osascript."""
     key_map = {
         "return": "return",
         "tab": "tab",
@@ -79,159 +74,183 @@ HTML_PAGE = """<!DOCTYPE html>
 <html>
 <head>
     <title>macOS Web Remote</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <style>
-        * { box-sizing: border-box; }
-        body { margin: 0; background: #1a1a1a; color: #e0e0e0;
-               font-family: -apple-system, sans-serif; -webkit-user-select: none; user-select: none; }
-        .header { background: #2a2a2a; padding: 8px 12px; position: sticky; top: 0; z-index: 100; }
-        .header h1 { font-size: 16px; margin: 0 0 8px 0; }
-        .controls { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-        .controls button { background: #0a84ff; color: white; border: none;
-            padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 14px;
-            min-height: 36px; min-width: 44px; }
-        .controls button:active { background: #0066d6; transform: scale(0.95); }
-        .controls button.toggle { background: #555; }
-        .controls button.toggle.active { background: #d63031; }
-        .controls button.green { background: #00b894; }
-        .controls input[type="text"] { background: #333; border: 1px solid #555; color: #fff;
-            padding: 8px 10px; border-radius: 6px; font-size: 14px; flex: 1; min-width: 120px; }
-        .screenshot-container { text-align: center; padding: 5px; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: #1a1a1a; color: #e0e0e0; font-family: Consolas, monospace; }
+        .topbar { background: #2a2a2a; padding: 8px 12px; display: flex;
+                  align-items: center; gap: 8px; flex-wrap: wrap; position: sticky; top: 0; z-index: 100; }
+        .topbar h1 { font-size: 14px; margin-right: 10px; }
+        .topbar button { background: #0a84ff; color: white; border: none;
+            padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+        .topbar button:hover { background: #0066d6; }
+        .topbar button:active { transform: scale(0.95); }
+        .topbar button.rc-active { background: #d63031; }
+        .topbar input[type="text"] { background: #333; border: 1px solid #555; color: #fff;
+            padding: 6px 8px; border-radius: 4px; font-size: 13px; font-family: monospace; }
+        .topbar input[type="number"] { background: #333; border: 1px solid #555; color: #fff;
+            padding: 6px 8px; border-radius: 4px; font-size: 13px; font-family: monospace; width: 60px; }
+        .topbar label { font-size: 12px; color: #aaa; }
+        .screenshot-wrap { text-align: center; padding: 8px; }
         #screenshot { max-width: 100%; cursor: crosshair; border: 2px solid #444;
-            border-radius: 4px; display: block; margin: 0 auto; }
-        #coords { position: fixed; top: 5px; right: 5px; background: rgba(0,0,0,0.9);
-            color: #0f0; padding: 6px 12px; border-radius: 6px; font-family: monospace;
-            font-size: 14px; z-index: 200; }
-        #log { position: fixed; bottom: 5px; left: 5px; right: 5px; background: rgba(0,0,0,0.9);
-            color: #ff0; padding: 6px 12px; border-radius: 6px; font-family: monospace;
-            font-size: 12px; z-index: 200; text-align: center; }
-        .tip { font-size: 11px; color: #888; margin-top: 6px; }
+            border-radius: 4px; }
+        #coords { position: fixed; top: 50px; right: 12px; background: rgba(0,0,0,0.9);
+            color: #0f0; padding: 6px 12px; border-radius: 4px; font-size: 14px; z-index: 200; }
+        #lastclick { position: fixed; top: 80px; right: 12px; background: rgba(0,0,0,0.9);
+            color: #ff0; padding: 6px 12px; border-radius: 4px; font-size: 14px; z-index: 200; }
+        #status { position: fixed; bottom: 12px; left: 12px; background: rgba(0,0,0,0.9);
+            color: #0af; padding: 6px 12px; border-radius: 4px; font-size: 12px; z-index: 200; }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>🖥️ macOS Web Remote</h1>
-        <div class="controls">
-            <button class="green" onclick="refresh()">🔄</button>
-            <input type="text" id="text_input" placeholder="Type text..." onkeydown="if(event.key==='Enter')doType()">
-            <button onclick="doType()">Type</button>
-            <button onclick="doKey('return')">⏎</button>
-            <button onclick="doKey('tab')">⇥</button>
-            <button onclick="doKey('escape')">Esc</button>
-            <button onclick="doKey('delete')">⌫</button>
-            <button onclick="doKey('cmd_g')">⌘⇧G</button>
-            <button onclick="doKey('cmd_v')">⌘V</button>
-            <button class="toggle" id="rc_toggle" onclick="toggleRC()">R-Click</button>
-        </div>
-        <div class="tip">Tap screenshot to click. Toggle R-Click for right-click. 🔄 to refresh.</div>
+    <div class="topbar">
+        <h1>macOS Web Remote</h1>
+        <button onclick="refresh()">🔄 Refresh</button>
+        <label>X:</label>
+        <input type="number" id="manual_x" placeholder="x" value="">
+        <label>Y:</label>
+        <input type="number" id="manual_y" placeholder="y" value="">
+        <button onclick="manualClick()">Click XY</button>
+        <button id="rc_btn" onclick="toggleRC()">R-Click OFF</button>
+        <input type="text" id="text_input" placeholder="Type text..." style="width:150px"
+               onkeydown="if(event.key==='Enter')doType()">
+        <button onclick="doType()">Type</button>
+        <button onclick="doKey('return')">⏎</button>
+        <button onclick="doKey('tab')">⇥</button>
+        <button onclick="doKey('escape')">Esc</button>
+        <button onclick="doKey('delete')">⌫</button>
+        <button onclick="doKey('cmd_g')">⌘⇧G</button>
+        <button onclick="doKey('cmd_v')">⌘V</button>
     </div>
-    <div class="screenshot-container">
+    <div class="screenshot-wrap">
         <img id="screenshot" />
     </div>
-    <div id="coords">(0, 0)</div>
-    <div id="log">Loading...</div>
+    <div id="coords">Mouse: (0, 0)</div>
+    <div id="lastclick">Last click: none</div>
+    <div id="status">Loading...</div>
 
     <script>
         let img = document.getElementById('screenshot');
-        let coords = document.getElementById('coords');
-        let logDiv = document.getElementById('log');
-        let rcToggle = document.getElementById('rc_toggle');
+        let coordsDiv = document.getElementById('coords');
+        let lastClickDiv = document.getElementById('lastclick');
+        let statusDiv = document.getElementById('status');
+        let rcBtn = document.getElementById('rc_btn');
         let rightClickMode = false;
+        let isClicking = false;  // prevent double-clicks
 
-        function addLog(msg) {
-            logDiv.innerText = msg;
-        }
+        function setStatus(msg) { statusDiv.innerText = msg; }
+        function setLastClick(x, y, btn) { lastClickDiv.innerText = 'Last click: (' + x + ', ' + y + ') ' + btn; }
 
         function refresh() {
-            addLog('Refreshing...');
+            setStatus('Refreshing screenshot...');
             fetch('/screenshot?' + Date.now())
                 .then(r => r.text())
                 .then(data => {
                     img.src = 'data:image/png;base64,' + data;
-                    addLog('Ready ' + new Date().toLocaleTimeString());
+                    setStatus('Ready ' + new Date().toLocaleTimeString());
                 })
-                .catch(e => addLog('Error: ' + e));
+                .catch(e => setStatus('Error: ' + e));
         }
 
         function toggleRC() {
             rightClickMode = !rightClickMode;
-            if (rightClickMode) {
-                rcToggle.classList.add('active');
-                addLog('Right-click mode ON');
-            } else {
-                rcToggle.classList.remove('active');
-                addLog('Right-click mode OFF');
-            }
+            rcBtn.innerText = rightClickMode ? 'R-Click ON' : 'R-Click OFF';
+            rcBtn.classList.toggle('rc-active', rightClickMode);
         }
 
         function getCoords(event) {
             const rect = img.getBoundingClientRect();
             const scaleX = img.naturalWidth / rect.width;
             const scaleY = img.naturalHeight / rect.height;
-            let clientX, clientY;
-            if (event.touches && event.touches.length > 0) {
-                clientX = event.touches[0].clientX;
-                clientY = event.touches[0].clientY;
-            } else if (event.changedTouches && event.changedTouches.length > 0) {
-                clientX = event.changedTouches[0].clientX;
-                clientY = event.changedTouches[0].clientY;
-            } else {
-                clientX = event.clientX;
-                clientY = event.clientY;
-            }
-            const x = Math.round((clientX - rect.left) * scaleX);
-            const y = Math.round((clientY - rect.top) * scaleY);
+            const x = Math.round((event.clientX - rect.left) * scaleX);
+            const y = Math.round((event.clientY - rect.top) * scaleY);
             return { x, y };
         }
 
-        function doClick(event) {
-            event.preventDefault();
+        // CRITICAL: mousemove ONLY updates coords display, NEVER clicks
+        img.addEventListener('mousemove', function(event) {
+            const { x, y } = getCoords(event);
+            coordsDiv.innerText = 'Mouse: (' + x + ', ' + y + ')';
+        });
+
+        // CRITICAL: click ONLY fires on actual mouse click, NOT on mousemove
+        img.addEventListener('click', function(event) {
+            if (isClicking) return;  // prevent double-fire
+            isClicking = true;
             const { x, y } = getCoords(event);
             const btn = rightClickMode ? 'right' : 'left';
-            addLog('Click (' + x + ',' + y + ') ' + btn);
+            setLastClick(x, y, btn);
+            setStatus('Clicking (' + x + ', ' + y + ') ' + btn + '...');
             fetch('/click?x=' + x + '&y=' + y + '&button=' + btn)
                 .then(r => r.text())
                 .then(data => {
-                    addLog('Done: ' + data);
-                    setTimeout(refresh, 600);
+                    setStatus('Clicked OK: ' + data);
+                    setTimeout(function() {
+                        refresh();
+                        isClicking = false;
+                    }, 500);
                 })
-                .catch(e => addLog('Error: ' + e));
-        }
-
-        // Handle both touch and mouse
-        img.addEventListener('click', doClick);
-        img.addEventListener('touchend', doClick);
-
-        img.addEventListener('mousemove', function(event) {
-            const { x, y } = getCoords(event);
-            coords.innerText = '(' + x + ', ' + y + ')';
+                .catch(e => {
+                    setStatus('Error: ' + e);
+                    isClicking = false;
+                });
         });
 
-        // Also show coords on touch
-        img.addEventListener('touchmove', function(event) {
+        // Right-click via context menu event
+        img.addEventListener('contextmenu', function(event) {
             event.preventDefault();
+            if (isClicking) return;
+            isClicking = true;
             const { x, y } = getCoords(event);
-            coords.innerText = '(' + x + ', ' + y + ')';
-        }, { passive: false });
+            setLastClick(x, y, 'right');
+            setStatus('Right-clicking (' + x + ', ' + y + ')...');
+            fetch('/click?x=' + x + '&y=' + y + '&button=right')
+                .then(r => r.text())
+                .then(data => {
+                    setStatus('Right-clicked OK');
+                    setTimeout(function() {
+                        refresh();
+                        isClicking = false;
+                    }, 500);
+                })
+                .catch(e => {
+                    setStatus('Error: ' + e);
+                    isClicking = false;
+                });
+        });
+
+        function manualClick() {
+            const x = parseInt(document.getElementById('manual_x').value);
+            const y = parseInt(document.getElementById('manual_y').value);
+            if (isNaN(x) || isNaN(y)) { setStatus('Enter valid X,Y'); return; }
+            const btn = rightClickMode ? 'right' : 'left';
+            setLastClick(x, y, btn);
+            setStatus('Clicking (' + x + ', ' + y + ') ' + btn + '...');
+            fetch('/click?x=' + x + '&y=' + y + '&button=' + btn)
+                .then(r => r.text())
+                .then(data => {
+                    setStatus('Clicked OK: ' + data);
+                    setTimeout(refresh, 500);
+                });
+        }
 
         function doType() {
             const text = document.getElementById('text_input').value;
             if (!text) return;
-            addLog('Typing: ' + text.substring(0, 20) + '...');
+            setStatus('Typing...');
             fetch('/type?text=' + encodeURIComponent(text))
                 .then(r => r.text())
                 .then(data => {
-                    addLog('Typed OK');
+                    setStatus('Typed OK');
                     setTimeout(refresh, 500);
                 });
         }
 
         function doKey(key) {
-            addLog('Key: ' + key);
+            setStatus('Key: ' + key);
             fetch('/key?key=' + key)
                 .then(r => r.text())
                 .then(data => {
-                    addLog('Key done');
+                    setStatus('Key done');
                     setTimeout(refresh, 300);
                 });
         }
@@ -245,7 +264,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
 class RemoteHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        pass  # suppress default logging
+        pass
 
     def do_GET(self):
         if self.path == "/" or self.path.startswith("/?"):
@@ -297,13 +316,10 @@ class RemoteHandler(http.server.BaseHTTPRequestHandler):
 
 def main():
     print(f"    [web-remote] starting on port {PORT}", flush=True)
-    print(f"    [web-remote] open http://<tailscale-ip>:{PORT} in your browser", flush=True)
-
-    # Take an initial screenshot
     try:
         subprocess.run(["screencapture", "-x", "-C", SCREENSHOT_PATH],
                        capture_output=True, check=True)
-        print(f"    [web-remote] initial screenshot OK ({os.path.getsize(SCREENSHOT_PATH)} bytes)", flush=True)
+        print(f"    [web-remote] initial screenshot OK", flush=True)
     except Exception as e:
         print(f"    [web-remote][WARN] initial screenshot failed: {e}", flush=True)
 
