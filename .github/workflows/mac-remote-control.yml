@@ -39,7 +39,7 @@ concurrency:
 
 jobs:
   mac-remote:
-    runs-on: macos-15
+    runs-on: macos-latest
     timeout-minutes: 240
     env:
       # Secrets
