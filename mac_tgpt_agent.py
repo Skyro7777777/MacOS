@@ -307,6 +307,15 @@ def grant_one_permission(name: str, url: str) -> bool:
     """Grant one permission (Screen Recording, Accessibility, or Input Monitoring)."""
     log(f"=== granting {name} ===")
 
+    # 0. CRITICAL: launch RustDesk first so macOS adds it to the privacy lists.
+    # When RustDesk tries to use a protected API (screen capture, accessibility,
+    # input monitoring), macOS automatically adds it to the corresponding
+    # privacy list with the toggle OFF. Without this step, RustDesk won't be
+    # in the list and the toggle search will return NOT_FOUND.
+    log(f"  launching RustDesk to trigger TCC registration...")
+    subprocess.run(["open", "-a", "RustDesk"], check=False)
+    time.sleep(5)  # give RustDesk time to attempt protected API access
+
     # 1. open the privacy pane directly
     log(f"  opening {name} pane...")
     open_pane(url)
