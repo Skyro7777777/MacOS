@@ -56,26 +56,26 @@ fi
 ok "ollama + llava:7b ready"
 
 # --- 2. install Open Interpreter --------------------------------------------
+# CRITICAL: create a FRESH venv every run. The venv cache was causing
+# pkg_resources to be missing even after installing setuptools (Python 3.12
+# venvs don't include setuptools by default, and cached venvs from previous
+# runs without setuptools break). A fresh venv + setuptools + OI takes ~30s.
 VENV_DIR="$STATE_DIR/oi-venv"
-if [ ! -x "$VENV_DIR/bin/python" ]; then
-  log "creating Python venv for Open Interpreter"
-  python3 -m venv "$VENV_DIR"
-  "$VENV_DIR/bin/python" -m pip install --quiet --upgrade pip 2>&1 | tail -n1
-fi
+log "creating fresh Python venv for Open Interpreter"
+rm -rf "$VENV_DIR"
+python3 -m venv "$VENV_DIR"
+"$VENV_DIR/bin/python" -m pip install --quiet --upgrade pip 2>&1 | tail -n1
 
-if ! "$VENV_DIR/bin/python" -c "import interpreter" 2>/dev/null; then
-  log "installing open-interpreter==0.4.3 (the version with --os mode)"
-  # CRITICAL: install setuptools first — open-interpreter 0.4.3 needs pkg_resources
-  # (part of setuptools) but Python 3.12 venvs don't include it by default
-  "$VENV_DIR/bin/python" -m pip install --quiet setuptools 2>&1 | tail -n1
-  "$VENV_DIR/bin/python" -m pip install --quiet "open-interpreter==0.4.3" 2>&1 | tail -n3
-fi
+log "installing setuptools (required by OI for pkg_resources)"
+"$VENV_DIR/bin/python" -m pip install --quiet setuptools 2>&1 | tail -n1
 
-# ALWAYS ensure pkg_resources is available (the venv may be cached from a
-# previous run where setuptools wasn't installed yet)
+log "installing open-interpreter==0.4.3 (the version with --os mode)"
+"$VENV_DIR/bin/python" -m pip install --quiet "open-interpreter==0.4.3" 2>&1 | tail -n3
+
+# VERIFY pkg_resources is actually importable
 if ! "$VENV_DIR/bin/python" -c "import pkg_resources" 2>/dev/null; then
-  log "installing setuptools (pkg_resources missing in cached venv)"
-  "$VENV_DIR/bin/python" -m pip install --quiet setuptools 2>&1 | tail -n1
+  warn "pkg_resources still missing after setuptools install — trying force-reinstall"
+  "$VENV_DIR/bin/python" -m pip install --force-reinstall setuptools 2>&1 | tail -n2
 fi
 ok "open-interpreter ready"
 
