@@ -83,37 +83,38 @@ if ! "$VENV_DIR/bin/python" -c "import transformers; assert transformers.__versi
   log "installing transformers==4.56.1 (PINNED for moondream2 compatibility)..."
   "$VENV_DIR/bin/python" -m pip install --quiet "transformers==4.56.1" 2>&1 | tail -n3
 fi
-if ! "$VENV_DIR/bin/python" -c "import accelerate, einops, pyvips, torchao" 2>/dev/null; then
-  log "installing accelerate + einops + Pillow + pyvips + torchao (for INT4 quantized model)..."
+if ! "$VENV_DIR/bin/python" -c "import accelerate, einops, pyvips, hf_transfer" 2>/dev/null; then
+  log "installing accelerate + einops + Pillow + pyvips + hf_transfer (fast downloader)..."
   "$VENV_DIR/bin/python" -m pip install --quiet \
       "accelerate>=1.10.0" "Pillow>=11.0.0" einops \
-      "pyvips-binary==8.16.0" "pyvips==2.2.3" torchao 2>&1 | tail -n3
+      "pyvips-binary==8.16.0" "pyvips==2.2.3" hf_transfer 2>&1 | tail -n3
 fi
 ok "venv ready: $($VENV_DIR/bin/python -c 'import torch, transformers; print(f"torch {torch.__version__}, transformers {transformers.__version__}")')"
 
-# --- 3b. pre-download the moondream2 model with VISIBLE progress -------------
-# Using the 4-bit quantized model (Azaz666/moondream2-PYTORCH-INT4, ~1.1 GB)
-# instead of the full model (vikhyatk/moondream2, 3.7 GB). Downloads in ~40-60s
-# instead of 3-6 min. Same point() API.
-log "pre-downloading moondream2 INT4 quantized (~1.1 GB) with progress bars..."
-HF_HUB_DISABLE_PROGRESS_BARS=0 HF_HUB_ENABLE_HF_TRANSFER=0 \
+# --- 3b. pre-download the moondream2 model with hf_transfer (FAST) -------------
+# Using the full model (vikhyatk/moondream2, 3.7 GB) with hf_transfer (Rust-based
+# downloader) — downloads in ~40s instead of 3-6 min. The INT4 quantized model
+# (Azaz666) requires torchao cpp extensions which need torch >= 2.11.0; we have
+# 2.9.1 so it crashes with size mismatch.
+log "pre-downloading moondream2 full model (~3.7 GB, hf_transfer fast download)..."
+HF_HUB_DISABLE_PROGRESS_BARS=0 HF_HUB_ENABLE_HF_TRANSFER=1 \
 PYTORCH_ENABLE_MPS_FALLBACK=1 \
 "$VENV_DIR/bin/python" -c "
 from huggingface_hub import snapshot_download
 import sys
-print('  downloading Azaz666/moondream2-PYTORCH-INT4 (~1.1 GB)...', flush=True)
-print('  (if this seems stuck, it IS downloading — watch for progress bars)', flush=True)
+print('  downloading vikhyatk/moondream2 (rev=2025-06-21, ~3.7 GB)...', flush=True)
+print('  (hf_transfer enabled — should be ~40s)', flush=True)
 snapshot_download(
-    repo_id='Azaz666/moondream2-PYTORCH-INT4',
-    revision='main',
+    repo_id='vikhyatk/moondream2',
+    revision='2025-06-21',
     repo_type='model',
 )
 print('  model cached successfully', flush=True)
 " 2>&1 | while IFS= read -r line; do log "  $line"; done
-ok "moondream2 INT4 model pre-downloaded"
+ok "moondream2 model pre-downloaded"
 
 # --- 4. launch the moondream2 agent -----------------------------------------
-log "launching moondream2 agent (INT4 model loads from cache, ~15s)"
+log "launching moondream2 agent (full model loads from cache, ~15s)"
 MOONDREAM_PASSWORD="$MAC_USER_PASSWORD" \
 MOONDREAM_MAX_STEPS="30" \
 "$VENV_DIR/bin/python" "$PROJECT_ROOT/mac_moondream_agent.py" || {

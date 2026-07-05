@@ -303,6 +303,8 @@ start_dialog_dismissal_loop() {
         done
       fi
       # ALSO try osascript as a secondary method (works on macOS < 15.4)
+      # Handle: "Allow*" buttons, "Don't Allow" (RustDesk network dialog),
+      # "Cancel" (AppleCare sign-in dialog), "Not Now" (any nag dialog)
       osascript -e '
         try
           tell application "System Events"
@@ -312,9 +314,20 @@ start_dialog_dismissal_loop() {
                   repeat with b in (every button of w)
                     try
                       set bName to name of b as text
+                      -- click Allow / Allow For One Month / Allow For One Day
                       if bName starts with "Allow" then
                         click b
                         return "dismissed:" & bName
+                      end if
+                      -- dismiss "Sign In to View AppleCare" by clicking Cancel
+                      if bName is "Cancel" then
+                        click b
+                        return "dismissed:Cancel"
+                      end if
+                      -- dismiss "Not Now" nag dialogs
+                      if bName is "Not Now" then
+                        click b
+                        return "dismissed:Not Now"
                       end if
                     end try
                   end repeat

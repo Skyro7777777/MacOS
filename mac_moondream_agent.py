@@ -46,11 +46,12 @@ def _patched_getattr(self, name):
     return _orig_getattr(self, name)
 torch.nn.Module.__getattr__ = _patched_getattr
 
-# Use the 4-bit quantized moondream2 — only 1.13 GB (vs 3.7 GB for the full
-# model). Downloads in ~40-60s instead of 3-6 min. Same point() API.
-# If the quantized model fails, fall back to the full model.
-MODEL_ID = os.environ.get("MOONDREAM_MODEL", "Azaz666/moondream2-PYTORCH-INT4")
-MODEL_REV = os.environ.get("MOONDREAM_REV", "main")
+# Use the FULL moondream2 model with hf_transfer (Rust-based fast downloader)
+# The INT4 quantized model (Azaz666) requires torchao cpp extensions which
+# need torch >= 2.11.0 — we have 2.9.1, so it crashes with size mismatch.
+# The full model is 3.7 GB but with hf_transfer it downloads in ~40s.
+MODEL_ID = os.environ.get("MOONDREAM_MODEL", "vikhyatk/moondream2")
+MODEL_REV = os.environ.get("MOONDREAM_REV", "2025-06-21")
 MAX_STEPS = int(os.environ.get("MOONDREAM_MAX_STEPS", "30"))
 PASSWORD = os.environ.get("MOONDREAM_PASSWORD", "")
 
@@ -161,12 +162,12 @@ def load_model():
     log(f"device={_device} dtype={dtype}")
     log(f"model={MODEL_ID} (rev={MODEL_REV})")
 
-    # Pre-download with visible progress (avoids silent hang in CI)
+    # Pre-download with hf_transfer (Rust-based, ~40s for 3.7 GB vs 3-6 min without)
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "0")
-    os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
+    os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"  # force enable hf_transfer
     try:
         from huggingface_hub import snapshot_download
-        log(f"pre-downloading {MODEL_ID} (~1.1 GB INT4 quantized) with progress...")
+        log(f"pre-downloading {MODEL_ID} (~3.7 GB, hf_transfer=on) with progress...")
         log("  (if this seems stuck, it's downloading — watch for progress bars below)")
         snapshot_download(
             repo_id=MODEL_ID,
