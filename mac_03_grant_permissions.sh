@@ -171,15 +171,48 @@ for cycle in $(seq 1 "$MAX_CYCLES"); do
   gui_run open -a RustDesk 2>/dev/null || true
   sleep 3
 
-  # 2b. click the Configure button at the fixed coordinate
+  # 2b. CRITICAL: dismiss the "Allow RustDesk to find devices on local networks?"
+  #     dialog BEFORE clicking Configure. This dialog appears every time RustDesk
+  #     opens and blocks the Configure button. The dialog has "Don't Allow" (left)
+  #     and "Allow" (right) buttons. We click "Allow" on the RIGHT side (~612,400).
+  log "dismissing 'find devices on local networks' dialog if present..."
+  for x in 580 612 640 550; do
+    cliclick c:"$x",400 2>/dev/null || true
+  done
+  # also try osascript to click any "Allow" button
+  osascript -e '
+    try
+      tell application "System Events"
+        repeat with p in (every process whose background only is false)
+          repeat with w in (windows of p)
+            try
+              repeat with b in (every button of w)
+                try
+                  if (name of b as text) starts with "Allow" then
+                    click b
+                    return "dismissed"
+                  end if
+                end try
+              end repeat
+            end try
+          end repeat
+        end repeat
+      end tell
+    end try
+  ' 2>/dev/null || true
+  sleep 2
+  take_screenshot "03_cycle${cycle}_after_dismiss_network"
+
+  # 2c. click the Configure button at the fixed coordinate
   log "clicking Configure at fixed coordinate (210, 565)"
   cliclick c:210,565 2>/dev/null || true
   sleep 4
   take_screenshot "03_cycle${cycle}_after_configure"
 
-  # 2c. verify System Settings opened
-  if ! osascript -e 'tell application "System Events" to return (count of (every process whose name is "System Settings")) > 0' 2>/dev/null | grep -q "true"; then
-    warn "System Settings did not open — Configure click may have missed"
+  # 2d. verify System Settings is actually showing a window (not just running)
+  ss_window_count="$(osascript -e 'tell application "System Events" to return (count of windows of (first process whose name is "System Settings"))' 2>/dev/null || echo "0")"
+  if [ "$ss_window_count" = "0" ] 2>/dev/null; then
+    warn "System Settings has no window — Configure click may have missed"
     take_screenshot "03_cycle${cycle}_settings_not_open"
     continue
   fi

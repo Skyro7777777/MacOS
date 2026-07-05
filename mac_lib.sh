@@ -295,9 +295,13 @@ start_dialog_dismissal_loop() {
       #
       # cliclick uses CGEventPost which bypasses the AX-visibility bug.
       if command -v cliclick >/dev/null 2>&1; then
-        # try several candidate "Allow" button positions (centered dialog, left button)
-        for y in 429 384 350 400 450; do
-          for x in 412 380 440 350 470; do
+        # Click BOTH the LEFT and RIGHT buttons of centered dialogs.
+        # Different dialogs put "Allow" on different sides:
+        #   - "bypass window picker": Allow is LEFT (~412,429)
+        #   - "find devices on local networks": Allow is RIGHT (~612,400)
+        # We click a grid covering both sides to handle all variants.
+        for y in 429 400 384 350 450; do
+          for x in 412 380 440 350 470 512 550 580 612 640; do
             cliclick c:"$x","$y" 2>/dev/null || true
           done
         done
