@@ -70,6 +70,13 @@ if ! "$VENV_DIR/bin/python" -c "import interpreter" 2>/dev/null; then
   "$VENV_DIR/bin/python" -m pip install --quiet setuptools 2>&1 | tail -n1
   "$VENV_DIR/bin/python" -m pip install --quiet "open-interpreter==0.4.3" 2>&1 | tail -n3
 fi
+
+# ALWAYS ensure pkg_resources is available (the venv may be cached from a
+# previous run where setuptools wasn't installed yet)
+if ! "$VENV_DIR/bin/python" -c "import pkg_resources" 2>/dev/null; then
+  log "installing setuptools (pkg_resources missing in cached venv)"
+  "$VENV_DIR/bin/python" -m pip install --quiet setuptools 2>&1 | tail -n1
+fi
 ok "open-interpreter ready"
 
 # --- 3. start screenshot + dialog-dismissal loops ---------------------------
