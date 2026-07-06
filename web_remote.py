@@ -27,11 +27,29 @@ SCREENSHOT_PATH = "/tmp/apple-project/web_remote_screenshot.png"
 os.makedirs("/tmp/apple-project", exist_ok=True)
 
 
+_last_screenshot_b64 = ""
+
 def take_screenshot() -> str:
-    subprocess.run(["screencapture", "-x", "-C", SCREENSHOT_PATH],
-                   capture_output=True, check=True)
-    with open(SCREENSHOT_PATH, "rb") as f:
-        return base64.b64encode(f.read()).decode("ascii")
+    """Take a screenshot. Retries on failure. Returns last good screenshot if all fail."""
+    global _last_screenshot_b64
+    for attempt in range(3):
+        try:
+            result = subprocess.run(
+                ["screencapture", "-x", "-C", SCREENSHOT_PATH],
+                capture_output=True, timeout=10
+            )
+            if result.returncode == 0 and os.path.exists(SCREENSHOT_PATH) and os.path.getsize(SCREENSHOT_PATH) > 100:
+                with open(SCREENSHOT_PATH, "rb") as f:
+                    _last_screenshot_b64 = base64.b64encode(f.read()).decode("ascii")
+                return _last_screenshot_b64
+            time.sleep(1)
+        except Exception:
+            time.sleep(1)
+    # All attempts failed — return last good screenshot (or empty string if none)
+    if _last_screenshot_b64:
+        return _last_screenshot_b64
+    # No screenshot at all — return a 1x1 transparent PNG
+    return "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
 
 def click_at(x: int, y: int, button: str = "left") -> None:
@@ -409,9 +427,22 @@ HTML_PAGE = """<!DOCTYPE html>
 
 class RemoteHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        pass
+        pass  # suppress default logging
 
     def do_GET(self):
+        try:
+            self._handle_get()
+        except Exception as e:
+            # Never crash the server — return a simple error response
+            try:
+                self.send_response(500)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(f"Error: {e}".encode())
+            except Exception:
+                pass
+
+    def _handle_get(self):
         if self.path == "/" or self.path.startswith("/?"):
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
@@ -497,7 +528,10 @@ def main():
     except Exception as e:
         print(f"    [web-remote][WARN] initial screenshot failed: {e}", flush=True)
 
-    with socketserver.TCPServer(("0.0.0.0", PORT), RemoteHandler) as httpd:
+    # Use ThreadingTCPServer so multiple requests don't block each other
+    socketserver.TCPServer.allow_reuse_address = True
+    with socketserver.ThreadingTCPServer(("0.0.0.0", PORT), RemoteHandler) as httpd:
+        httpd.daemon_threads = True
         httpd.serve_forever()
 
 
