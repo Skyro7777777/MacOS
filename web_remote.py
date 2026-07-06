@@ -70,7 +70,32 @@ def type_password_at(password: str, x: int, y: int) -> None:
     time.sleep(0.3)
     # 3. Press Return to submit
     subprocess.run(["osascript", "-e", 'tell application "System Events" to key code 36'], capture_output=True)  # return
-    time.sleep(0.5)
+    time.sleep(1.0)
+    # 4. ALSO click "Modify Settings" via AX (Return alone may not submit
+    #    on macOS SecurityAgent — the button needs to be clicked)
+    subprocess.run(["osascript", "-e",
+        '''tell application "System Events"
+    repeat with procName in {"SecurityAgent", "CoreServicesUIAgent"}
+        set procList to (every process whose name is procName)
+        if (count of procList) > 0 then
+            set theProc to item 1 of procList
+            repeat with w in (windows of theProc)
+                try
+                    repeat with b in (every button of w)
+                        try
+                            set bName to name of b as text
+                            if bName is "Modify Settings" or bName is "OK" or bName is "Continue" then
+                                click b
+                                return
+                            end if
+                        end try
+                    end repeat
+                end try
+            end repeat
+        end if
+    end repeat
+end tell'''], capture_output=True)
+    time.sleep(1.0)
 
 
 def press_key(key: str) -> None:
