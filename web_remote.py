@@ -113,6 +113,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <html>
 <head>
     <title>macOS Web Remote</title>
+    <meta charset="UTF-8">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { background: #1a1a1a; color: #e0e0e0; font-family: Consolas, monospace; }
@@ -143,7 +144,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <body>
     <div class="topbar">
         <h1>macOS Web Remote</h1>
-        <button onclick="refresh()">🔄 Refresh</button>
+        <button onclick="refresh()">Refresh</button>
         <label>X:</label>
         <input type="number" id="manual_x" placeholder="x" value="">
         <label>Y:</label>
@@ -153,21 +154,21 @@ HTML_PAGE = """<!DOCTYPE html>
         <input type="text" id="text_input" placeholder="Type text..." style="width:150px"
                onkeydown="if(event.key==='Enter')doType()">
         <button onclick="doType()">Type</button>
-        <button onclick="doKey('return')">⏎</button>
-        <button onclick="doKey('tab')">⇥</button>
+        <button onclick="doKey('return')">Enter</button>
+        <button onclick="doKey('tab')">Tab</button>
         <button onclick="doKey('escape')">Esc</button>
-        <button onclick="doKey('delete')">⌫</button>
-        <button onclick="doKey('forwarddelete')">⌦</button>
-        <button onclick="doKey('cmd_g')">⌘⇧G</button>
-        <button onclick="doKey('cmd_a')">⌘A</button>
-        <button onclick="doKey('cmd_c')">⌘C</button>
-        <button onclick="doKey('cmd_v')">⌘V</button>
+        <button onclick="doKey('delete')">BkSp</button>
+        <button onclick="doKey('forwarddelete')">Del</button>
+        <button onclick="doKey('cmd_g')">Cmd+Shift+G</button>
+        <button onclick="doKey('cmd_a')">Cmd+A</button>
+        <button onclick="doKey('cmd_c')">Cmd+C</button>
+        <button onclick="doKey('cmd_v')">Cmd+V</button>
         <span style="color:#555;margin:0 5px">|</span>
         <label style="color:#ff0">PW X:</label>
         <input type="number" id="pw_x" value="504" style="width:50px">
         <label style="color:#ff0">Y:</label>
         <input type="number" id="pw_y" value="467" style="width:50px">
-        <button onclick="doTypePassword()" style="background:#d63031">🔐 Type Password</button>
+        <button onclick="doTypePassword()" style="background:#d63031">Type Password</button>
         <span style="color:#555;margin:0 5px">|</span>
         <button onclick="openPane('screen')">Screen Rec</button>
         <button onclick="openPane('accessibility')">Accessibility</button>
