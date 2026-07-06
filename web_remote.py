@@ -76,7 +76,12 @@ def press_key(key: str) -> None:
         "enter": "76",
         "tab": "48",
         "escape": "53",
-        "delete": "51",   # backspace
+        "delete": "51",   # backspace (delete left)
+        "forwarddelete": "117",  # forward delete (delete right)
+        "home": "115",
+        "end": "119",
+        "pageup": "116",
+        "pagedown": "121",
         "space": "49",
         "up": "126",
         "down": "125",
@@ -152,6 +157,7 @@ HTML_PAGE = """<!DOCTYPE html>
         <button onclick="doKey('tab')">⇥</button>
         <button onclick="doKey('escape')">Esc</button>
         <button onclick="doKey('delete')">⌫</button>
+        <button onclick="doKey('forwarddelete')">⌦</button>
         <button onclick="doKey('cmd_g')">⌘⇧G</button>
         <button onclick="doKey('cmd_a')">⌘A</button>
         <button onclick="doKey('cmd_c')">⌘C</button>
