@@ -130,9 +130,16 @@ HTML_PAGE = """<!DOCTYPE html>
         .topbar input[type="number"] { background: #333; border: 1px solid #555; color: #fff;
             padding: 6px 8px; border-radius: 4px; font-size: 13px; font-family: monospace; width: 60px; }
         .topbar label { font-size: 12px; color: #aaa; }
-        .screenshot-wrap { text-align: center; padding: 8px; }
+        .screenshot-wrap { text-align: center; padding: 8px; position: relative; display: inline-block; }
         #screenshot { max-width: 100%; cursor: crosshair; border: 2px solid #444;
-            border-radius: 4px; }
+            border-radius: 4px; display: block; margin: 0 auto; }
+        #crosshair { position: absolute; pointer-events: none; width: 20px; height: 20px;
+            border: 2px solid #ff0000; border-radius: 50%; transform: translate(-50%, -50%);
+            display: none; z-index: 50; }
+        #crosshair::before { content: ''; position: absolute; top: 50%; left: -10px; right: -10px;
+            height: 2px; background: #ff0000; transform: translateY(-50%); }
+        #crosshair::after { content: ''; position: absolute; left: 50%; top: -10px; bottom: -10px;
+            width: 2px; background: #ff0000; transform: translateX(-50%); }
         #coords { position: fixed; top: 50px; right: 12px; background: rgba(0,0,0,0.9);
             color: #0f0; padding: 6px 12px; border-radius: 4px; font-size: 14px; z-index: 200; }
         #lastclick { position: fixed; top: 80px; right: 12px; background: rgba(0,0,0,0.9);
@@ -170,13 +177,14 @@ HTML_PAGE = """<!DOCTYPE html>
         <input type="number" id="pw_y" value="467" style="width:50px">
         <button onclick="doTypePassword()" style="background:#d63031">Type Password</button>
         <span style="color:#555;margin:0 5px">|</span>
-        <button onclick="openPane('screen')">Screen Rec</button>
+        <button onclick="openPane('screen')">Screen Recording</button>
         <button onclick="openPane('accessibility')">Accessibility</button>
         <button onclick="openPane('input')">Input Mon</button>
         <button onclick="openPane('full_disk')">Full Disk</button>
     </div>
     <div class="screenshot-wrap">
         <img id="screenshot" />
+        <div id="crosshair"></div>
     </div>
     <div id="coords">Mouse: (0, 0)</div>
     <div id="lastclick">Last click: none</div>
@@ -190,6 +198,7 @@ HTML_PAGE = """<!DOCTYPE html>
         let rcBtn = document.getElementById('rc_btn');
         let rightClickMode = false;
         let isClicking = false;  // prevent double-clicks
+        let crosshair = document.getElementById('crosshair');
 
         function setStatus(msg) { statusDiv.innerText = msg; }
         function setLastClick(x, y, btn) { lastClickDiv.innerText = 'Last click: (' + x + ', ' + y + ') ' + btn; }
@@ -213,17 +222,43 @@ HTML_PAGE = """<!DOCTYPE html>
 
         function getCoords(event) {
             const rect = img.getBoundingClientRect();
-            const scaleX = img.naturalWidth / rect.width;
-            const scaleY = img.naturalHeight / rect.height;
-            const x = Math.round((event.clientX - rect.left) * scaleX);
-            const y = Math.round((event.clientY - rect.top) * scaleY);
+            // CRITICAL: use offsetX/offsetY if available (more accurate on Windows)
+            // fallback to clientX/Y calculation
+            let x, y;
+            if (event.offsetX !== undefined && event.offsetX !== 0) {
+                // offsetX/offsetY are relative to the element, already in the right scale
+                // but we need to scale from display size to natural size
+                const scaleX = img.naturalWidth / rect.width;
+                const scaleY = img.naturalHeight / rect.height;
+                x = Math.round(event.offsetX * scaleX);
+                y = Math.round(event.offsetY * scaleY);
+            } else {
+                const scaleX = img.naturalWidth / rect.width;
+                const scaleY = img.naturalHeight / rect.height;
+                x = Math.round((event.clientX - rect.left) * scaleX);
+                y = Math.round((event.clientY - rect.top) * scaleY);
+            }
+            // Clamp to valid range
+            x = Math.max(0, Math.min(x, img.naturalWidth - 1));
+            y = Math.max(0, Math.min(y, img.naturalHeight - 1));
             return { x, y };
         }
 
-        // CRITICAL: mousemove ONLY updates coords display, NEVER clicks
+        // CRITICAL: mousemove ONLY updates coords display + crosshair, NEVER clicks
         img.addEventListener('mousemove', function(event) {
             const { x, y } = getCoords(event);
             coordsDiv.innerText = 'Mouse: (' + x + ', ' + y + ')';
+            // Move crosshair to mouse position (relative to the screenshot-wrap div)
+            const rect = img.getBoundingClientRect();
+            const wrapRect = img.parentElement.getBoundingClientRect();
+            crosshair.style.display = 'block';
+            crosshair.style.left = (event.clientX - wrapRect.left) + 'px';
+            crosshair.style.top = (event.clientY - wrapRect.top) + 'px';
+        });
+
+        // Hide crosshair when mouse leaves the screenshot
+        img.addEventListener('mouseleave', function() {
+            crosshair.style.display = 'none';
         });
 
         // CRITICAL: click ONLY fires on actual mouse click, NOT on mousemove
