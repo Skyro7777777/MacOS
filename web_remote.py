@@ -50,18 +50,25 @@ def type_text(text: str) -> None:
 
 
 def type_password_at(password: str, x: int, y: int) -> None:
-    """Click at (x,y) to focus the password field, clear it, type password, press Return."""
-    subprocess.run(["cliclick", f"c:{x},{y}"], capture_output=True)
-    time.sleep(0.5)
-    # Clear field: Cmd+A then Delete
-    subprocess.run(["osascript", "-e", 'tell application "System Events" to keystroke "a" using {command down}'], capture_output=True)
-    time.sleep(0.1)
-    subprocess.run(["osascript", "-e", 'tell application "System Events" to key code 51'], capture_output=True)  # delete
-    time.sleep(0.1)
-    # Type password
+    """Type password into the macOS SecurityAgent password prompt.
+
+    The prompt has TWO fields: username (auto-focused, shows 'Anka') and
+    password (empty). We need to:
+    1. Press Tab to move focus from username to password field
+    2. Type the password
+    3. Press Return to submit
+
+    We do NOT click at (x,y) or use Cmd+A — that would select/clear the
+    USERNAME field and type the password there. Tab is the reliable way
+    to move to the password field on macOS.
+    """
+    # 1. Press Tab to move from username field to password field
+    subprocess.run(["osascript", "-e", 'tell application "System Events" to key code 48'], capture_output=True)  # tab
+    time.sleep(0.3)
+    # 2. Type the password into the now-focused password field
     subprocess.run(["cliclick", f"t:{password}"], capture_output=True)
     time.sleep(0.3)
-    # Press Return
+    # 3. Press Return to submit
     subprocess.run(["osascript", "-e", 'tell application "System Events" to key code 36'], capture_output=True)  # return
     time.sleep(0.5)
 
