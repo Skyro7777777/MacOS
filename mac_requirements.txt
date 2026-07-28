@@ -1,0 +1,26 @@
+# Python dependencies for mac_gui_agent.py (3-tier GUI permission agent)
+# Install into a venv (NOT system Python — PEP 668 blocks pip --user on macOS):
+#   python3 -m venv /tmp/apple-project/gui-agent-venv
+#   /tmp/apple-project/gui-agent-venv/bin/pip install -r mac_requirements.txt
+#
+# The deps are split by tier so you can install incrementally:
+#   Tier 1 (Apple Vision OCR)    — pyobjc-framework-Vision, pillow          (~50 MB)
+#   Tier 2 (OmniParser YOLO)     — ultralytics, huggingface_hub             (~200 MB + 40 MB model)
+#   Tier 3 (moondream2 VLM)      — torch, torchvision, transformers, ...    (~2 GB + 3.7 GB model)
+
+# --- Tier 1: Apple Vision OCR (macOS built-in, zero model download) ---
+pyobjc-framework-Vision>=9.0
+pyobjc-framework-Quartz>=9.0
+pillow>=10.0.0
+
+# --- Tier 2: OmniParser-v2.0 YOLO icon detector (40 MB model) ---
+ultralytics>=8.0.0
+huggingface_hub>=0.25.0
+
+# --- Tier 3: moondream2 (1.86B VLM, ~3.7 GB model, ~4 GB RAM at fp16) ---
+# Only needed if Tiers 1+2 fail.  Set GUI_AGENT_SKIP_VLM=true to skip.
+torch>=2.0.0
+torchvision>=0.15.0
+transformers>=4.47.0
+einops>=0.7.0
+timm>=0.9.0
