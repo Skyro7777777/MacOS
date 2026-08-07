@@ -6,7 +6,7 @@ on:
 jobs:
   decompile:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 3000
     steps:
       - name: Checkout repo (with LFS for the APK)
         uses: actions/checkout@v4
