@@ -7,46 +7,53 @@ This folder + the workflow in `.github/workflows/insta-patched-true-reel.yml` bu
 APK in GitHub Actions and upload it as an artifact. Download it from the **Actions** tab →
 latest run → **Instagram-true916-patched** artifact.
 
-## What the patch does
+## Root cause (found by reading jadx-decompiled Java source)
 
-Instagram's reels viewer (`instagram/features/clips/viewer/*`, a.k.a. "Clips") wraps each reel's
-video in a media3 `AspectRatioFrameLayout` and clamps it to **9:16** with `setAspectRatio(0.5625)`.
-On a phone taller than 9:16 (most modern phones are ~9:19.5), the clamped frame is centered,
-leaving empty bars top & bottom — and the video never reaches the physical screen edges.
+The previous patch versions (runs #1–#4) targeted the WRONG classes. The actual mechanism:
 
-The fix has three parts, all applied directly to the decompiled smali:
+- IG's reels video surface is `Lcom/instagram/ui/simplevideolayout/SimpleVideoLayout;`
+  (id `clips_video_layout` / `clips_video_container`), which extends `LX/7ky;`
+  (jadx name: `AbstractC210917ky`, internally called "VideoFrameLayout").
+- `LX/7ky;` extends `FrameLayout` and contains a `TextureView A02` field — the actual
+  video surface.
+- `LX/7ky;->onSizeChanged(IIII)V` overrides the default to compute the TextureView's
+  width/height via `LX/25U;->A00(...)` based on the VIDEO ASPECT RATIO, then sets
+  `FrameLayout.LayoutParams(w, h)` + translation X/Y on the TextureView.
+- For a 9:16 video (aspect 0.5625) on a 9:19.5 screen (aspect 0.4615), the "fit" mode
+  returns width=1080, height=1920 — centered on a 1080×2400 screen, leaving 240px gaps
+  top + bottom. **THIS is the visible gap above & below the reel.**
+
+Previous patches (media3 PlayerView, IgProgressImageView.onMeasure) had no effect because:
+- `IgProgressImageView` is just the poster image (extends FrameLayout containing an
+  IgImageView + ProgressBar), NOT the video surface.
+- media3 `PlayerView` / `AspectRatioFrameLayout` are not used by the swipeable reels feed.
+
+## The fix (v2)
 
 | # | Patch | Smali change | Effect |
 |---|-------|--------------|--------|
-| 1 | **Defeat the aspect clamp** | `setAspectRatio(F)V` → no-op (`.locals 0` / `return-void`) on every class that declares it | The reels frame can now grow to fill its parent (MATCH_PARENT) instead of being locked to 9:16 |
-| 2 | **Force stretch (no crop)** | `setResizeMode(I)V` → inject `const/4 p1, 3` after `.locals` | `RESIZE_MODE_FILL` (3) stretches the video to fill the frame. **No cropping** — the video is vertically stretched to fill the screen, exactly as requested. (The previous build wrongly used `4` = ZOOM = crop; this is corrected to `3` = FILL = stretch.) |
-| 3 | **Immersive edge-to-edge** | In the media3 `AspectRatioFrameLayout.setAspectRatio` no-op, also call `setSystemUiVisibility(0x16ff)` | Hides the status bar + nav bar and lays out edge-to-edge, so the video reaches the physical top & bottom of the display |
-
-Because IG's reels page root is already a **FrameLayout** (the bars are overlaid siblings, not
-in a vertical layout reserving space), defeating the aspect clamp + stretching makes the video
-fill the **entire screen behind the bars** — the bars (bottom nav, comment bar, right action
-column, top header) become transparent/overlaid on top of the full-screen video, exactly like
-TikTok. No layout restructure is needed.
+| 1 | **Stretch TextureView to fill** (KEY) | `LX/7ky;->onSizeChanged(IIII)V` rewritten to set `A02` (TextureView) layout params to `FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)` with translation X/Y = 0 | Bypasses the aspect-ratio math; video stretches to fill the SimpleVideoLayout (which already fills C3EO → ReelViewGroup → screen) edge-to-edge. **Stretch, no crop, no letterbox.** |
+| 2 | **Immersive on real video surface** (KEY) | `LX/7ky;->onAttachedToWindow()V` injects `setSystemUiVisibility(0x16ff)` | Hides status + nav bars when the actual reels video surface attaches (not media3 PlayerView, which reels doesn't use). |
+| 3 | setAspectRatio no-op (legacy, harmless) | `setAspectRatio(F)V` → no-op on media3 AspectRatioFrameLayout | Neutralises the aspect clamp on media3 surfaces (reels doesn't use these, but other IG surfaces might). |
+| 4 | setResizeMode FILL (legacy, harmless) | `setResizeMode(I)V` → `const/4 p1, 3` | Forces RESIZE_MODE_FILL (stretch) on media3 surfaces. |
+| 5 | IgProgressImageView.onMeasure super (legacy, harmless) | `onMeasure(II)V` → `super.onMeasure(p1, p2)` | Makes the poster image fill its parent (doesn't affect video, but consistent). |
+| 6 | PlayerView helper hook (for fullscreen button) | `media3/ui/PlayerView.onAttachedToWindow` → `TrueReelsHelper.onPlayerAttached(view)` | Hooks the fullscreen-button helper (PlayerView isn't used by reels feed, but may exist in other IG surfaces). |
 
 ## Fullscreen button for horizontal videos (TikTok-style)
 
-TikTok shows a "fullscreen" button on horizontal (16:9) videos. This patch adds the same:
+`TrueReelsHelper.java` is compiled to a separate `classesN.dex` and merged into the APK.
+It hooks `PlayerView.onAttachedToWindow`, polls the player's `getVideoSize()`, and when it
+detects a horizontal video (width > height), shows a fullscreen toggle button (top-right).
+Tapping it toggles the reels frame between `RESIZE_MODE_FILL` (stretch) and `RESIZE_MODE_ZOOM`
+(crop-to-fill).
 
-- `TrueReelsHelper.java` is compiled to a separate `classesN.dex` and merged into the APK.
-- `PlayerView.onAttachedToWindow` is patched to call `TrueReelsHelper.onPlayerAttached(view)`.
-- The helper polls the player's `getVideoSize()`; if `width > height` (horizontal), it shows a
-  fullscreen toggle button (top-right).
-- Tapping the button toggles the reels frame between `RESIZE_MODE_FILL` (stretch, default) and
-  `RESIZE_MODE_ZOOM` (crop-to-fill) — so you can switch between "show whole video, stretched"
-  and "crop to fill" for horizontal content.
-
-> Note: TikTok's native fullscreen mode launches a landscape player + rotate prompt. That
-> requires a new Activity and is out of reach of static smali patching. This patch implements
-> the portrait-screen fullscreen toggle (crop-fill on/off) instead.
+> Note: PlayerView isn't used by the swipeable reels feed, so this button may not appear on
+> reels — it's primarily for other IG video surfaces. The core stretch fix (patch #1) applies
+> to all videos regardless.
 
 ## Files
 
-- `patch.py` — main patcher script (apktool decompile → ripgrep → smali patches → recompile →
+- `patch.py` — main patcher script (apktool decompile → smali patches → recompile →
   merge helper.dex → sign).
 - `TrueReelsHelper.java` — runtime helper for the fullscreen button (compiled to dex, merged).
 - `../.github/workflows/insta-patched-true-reel.yml` — GitHub Actions workflow.
@@ -56,13 +63,6 @@ TikTok shows a "fullscreen" button on horizontal (16:9) videos. This patch adds 
 The workflow runs automatically on push to this folder, or manually via the Actions tab
 (**InstaPatchedTrueReel** → **Run workflow**). The patched, signed APK is uploaded as the
 `Instagram-true916-patched` artifact (30-day retention).
-
-To run locally:
-```bash
-java -jar apktool.jar ...   # see patch.py args
-python3 patch.py --apk Instagram-v435.0.0.37.76-patches-v3.8.0.apk --out out \
-                 --helper-dex helper.dex --apktool apktool.jar --signer uber-apk-signer.jar
-```
 
 ## Install
 
@@ -75,8 +75,8 @@ python3 patch.py --apk Instagram-v435.0.0.37.76-patches-v3.8.0.apk --out out \
 ## Honesty / limitations
 
 - The patching pipeline is fully verified (apktool + smali + sign produces a valid installable APK).
-- The on-device visual result (video behind bars, stretch, fullscreen button) is technically sound
-  per the reverse-engineering of IG's reels viewer, but must be confirmed on a real phone.
-- `ClipsViewerFragment` is renamed/obfuscated in this IG build, so the immersive injection targets
-  the media3 `AspectRatioFrameLayout` (which is reliably named) instead. The fullscreen-button
-  helper hooks `PlayerView.onAttachedToWindow` (also reliably named).
+- The on-device visual result depends on whether `LX/7ky;` is truly the only class controlling
+  the reels video surface size. If the video still doesn't fill the screen, there may be
+  additional clamping in `C3EO` (the wrapper around SimpleVideoLayout) or in the Litho
+  component tree that hosts C3EO. The next debugging step would be to also patch
+  `LX/3EO;` (C3EO) onMeasure/onSizeChanged, or trace the Litho layout.
