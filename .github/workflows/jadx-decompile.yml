@@ -23,19 +23,23 @@ jobs:
         run: |
           curl -sL -o jadx.zip https://github.com/skylot/jadx/releases/download/v1.5.0/jadx-1.5.0.zip
           unzip -q jadx.zip -d jadx
+          chmod +x jadx/bin/jadx
 
       - name: Decompile with jadx (readable Java source)
         run: |
           mkdir -p jadx-out
           APK="Instagram-v435.0.0.37.76-patches-v3.8.0.apk"
-          java -Djava.awt.headless=true -Xmx6g -jar jadx/lib/jadx-1.5.0-all.jar \
+          # Use the bin/jadx wrapper (sets CLI main class, handles headless)
+          ./jadx/bin/jadx \
             -d jadx-out \
             --no-res \
             --threads-count 4 \
             --log-level INFO \
-            "$APK" 2>&1 | tail -30
+            "$APK" 2>&1 | tail -40
           echo "=== java file count ==="
           find jadx-out -name "*.java" | wc -l
+          echo "=== sample tree ==="
+          find jadx-out -type d | head -10
 
       - name: Upload decompiled source
         uses: actions/upload-artifact@v4
