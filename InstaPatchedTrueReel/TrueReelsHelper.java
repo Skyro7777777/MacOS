@@ -5,9 +5,9 @@ import android.content.Context;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
-import android.os.Build;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -316,14 +316,14 @@ public class TrueReelsHelper {
         } catch (Throwable t) {}
     }
 
-    private static android.view.TextureView findTextureView(View view) {
-        if (view instanceof android.view.TextureView) {
-            return (android.view.TextureView) view;
+    private static TextureView findTextureView(View view) {
+        if (view instanceof TextureView) {
+            return (TextureView) view;
         }
         if (view instanceof ViewGroup) {
             ViewGroup vg = (ViewGroup) view;
             for (int i = 0; i < vg.getChildCount(); i++) {
-                android.view.TextureView tv = findTextureView(vg.getChildAt(i));
+                TextureView tv = findTextureView(vg.getChildAt(i));
                 if (tv != null) return tv;
             }
         }
