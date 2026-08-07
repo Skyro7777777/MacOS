@@ -67,13 +67,16 @@ def first_line(text, prefix):
 # ---------------------------------------------------------------------------
 # smali patch functions
 # ---------------------------------------------------------------------------
-def get_class_desc(content):
-    m = re.search(r'^\.class\s+(.+)$', content, re.M)
+def get_class_type(content):
+    """Extract just the L...; class type from the .class line."""
+    m = re.search(r'^\.class\s+.*?(L[^;]+;)', content, re.M)
     return m.group(1).strip() if m else None
 
-def patch_set_aspect_noop(content, inject_immersive=False, class_desc=None):
+def patch_set_aspect_noop(content, inject_immersive=False, class_type=None):
     """Neutralise setAspectRatio(F)V. If inject_immersive, also call
-    setSystemUiVisibility(0x16ff) to hide system bars + lay out edge-to-edge."""
+    View.setSystemUiVisibility(0x16ff) to hide system bars + lay out edge-to-edge.
+    Uses Landroid/view/View; (where setSystemUiVisibility is defined) so the
+    invoke-virtual resolves correctly up the hierarchy."""
     lines = content.split("\n")
     for i, line in enumerate(lines):
         if line.startswith(".method") and "setAspectRatio(F)V" in line:
@@ -85,11 +88,15 @@ def patch_set_aspect_noop(content, inject_immersive=False, class_desc=None):
                 j += 1
             if j >= len(lines):
                 continue
-            if inject_immersive and class_desc:
+            if inject_immersive:
+                # setSystemUiVisibility(I)V is defined on android.view.View.
+                # invoke-virtual {p0, v0} passes (this, flags). p0 is the view,
+                # v0 holds the flags (0x16ff = FULLSCREEN|HIDE_NAV|LAYOUT_STABLE|
+                # LAYOUT_FULLSCREEN|LAYOUT_HIDE_NAV|IMMERSIVE_STICKY).
                 body = [
                     "    .locals 1",
                     "    const/16 v0, 0x16ff",
-                    f"    invoke-virtual {{p0}}, {class_desc}->setSystemUiVisibility(I)V",
+                    "    invoke-virtual {p0, v0}, Landroid/view/View;->setSystemUiVisibility(I)V",
                     "    return-void",
                 ]
             else:
@@ -193,9 +200,9 @@ def main():
                 content = open(f, encoding="utf-8", errors="ignore").read()
             except Exception:
                 continue
-            cls = get_class_desc(content)
+            cls = get_class_type(content)
             is_media3 = cls and "media3/ui/AspectRatioFrameLayout" in cls
-            new, changed = patch_set_aspect_noop(content, inject_immersive=is_media3, class_desc=cls)
+            new, changed = patch_set_aspect_noop(content, inject_immersive=is_media3, class_type=cls)
             if changed:
                 open(f, "w", encoding="utf-8").write(new)
                 aspect_count += 1
