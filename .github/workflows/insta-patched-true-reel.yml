@@ -34,7 +34,7 @@ jobs:
           curl -sL -o uber-apk-signer.jar https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
           java -jar apktool.jar --version
 
-      - name: Compile TrueReelsHelper (fullscreen button)
+      - name: Compile TrueReelsHelper (fullscreen button + bar transparency + edge-to-edge)
         id: helper
         continue-on-error: true
         run: |
@@ -44,8 +44,9 @@ jobs:
           mkdir -p helper_classes helper_dex
           javac -source 17 -target 17 -classpath "$ANDROID_JAR" \
             -d helper_classes InstaPatchedTrueReel/TrueReelsHelper.java
+          # d8 needs ALL class files (including inner classes $1, $2, $3)
           "$D8" --release --output helper_dex --lib "$ANDROID_JAR" \
-            helper_classes/app/truereels/TrueReelsHelper.class
+            helper_classes/app/truereels/*.class
           mv helper_dex/classes.dex helper_dex/helper.dex
           ls -lh helper_dex/helper.dex
 
@@ -61,7 +62,7 @@ jobs:
               --helper-dex helper_dex/helper.dex \
               --apktool apktool.jar --signer uber-apk-signer.jar
           else
-            echo "::warning::Helper build failed; producing core-only APK (no fullscreen button)"
+            echo "::warning::Helper build failed; producing core-only APK (no fullscreen button / bar transparency)"
             python3 InstaPatchedTrueReel/patch.py \
               --apk "$APK" --out out --no-helper \
               --apktool apktool.jar --signer uber-apk-signer.jar

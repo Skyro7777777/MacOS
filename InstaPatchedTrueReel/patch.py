@@ -177,16 +177,21 @@ def patch_onsizechanged_stretch(content, class_type="LX/7ky;"):
     return content, False
 
 # ===========================================================================
-# Immersive flags injected into LX/7ky;->onAttachedToWindow (real video surface)
+# Immersive flags + TrueReelsHelper hook injected into LX/7ky;->onAttachedToWindow
 # ===========================================================================
-def patch_immersive_on_attach_v2(content, class_type="LX/7ky;"):
-    """Inject immersive system-UI flags into onAttachedToWindow()V of LX/7ky
-    (the actual reels video surface base class). If the method exists, prepend
-    the flags call (after super); if not, add a new override.
+def patch_immersive_on_attach_v2(content, class_type="LX/7ky;", helper_desc="Lapp/truereels/TrueReelsHelper;"):
+    """Inject into onAttachedToWindow()V of LX/7ky (the actual reels video surface
+    base class):
+      1. Call super.onAttachedToWindow (required)
+      2. Call TrueReelsHelper.onPlayerAttached(this) — the helper does:
+         - Makes all ancestors MATCH_PARENT (video fills screen edge-to-edge)
+         - Applies immersive + FLAG_LAYOUT_NO_LIMITS on the window (no black gap at top)
+         - Makes overlay bars transparent (TikTok-style translucent bars)
+         - Shows fullscreen button for horizontal videos
+      3. Set system UI flags 0x16ff (immersive sticky) directly as a fallback
 
-    Flags = 0x16ff = FULLSCREEN|HIDE_NAV|LAYOUT_STABLE|LAYOUT_FULLSCREEN|
-    LAYOUT_HIDE_NAV|IMMERSIVE_STICKY — hides status + nav bars, lays out
-    edge-to-edge, bars reappear transiently on swipe."""
+    If the method exists, prepend the calls (after super); if not, add a new override.
+    """
     flags = 0x16ff
     lines = content.split("\n")
     for i, line in enumerate(lines):
@@ -200,18 +205,22 @@ def patch_immersive_on_attach_v2(content, class_type="LX/7ky;"):
                     indent = m.group(1)
                     n = max(int(m.group(2)), 2)
                     lines[k] = f"{indent}.locals {n}"
-                    # Inject right after .locals: load flags into v0, call setSystemUiVisibility
-                    lines.insert(k+1, f"{indent}const/16 v0, {flags}")
-                    lines.insert(k+2, f"{indent}invoke-virtual {{p0, v0}}, Landroid/view/View;->setSystemUiVisibility(I)V")
+                    # Inject right after .locals:
+                    #   1. Call TrueReelsHelper.onPlayerAttached(p0) — does the heavy lifting
+                    #   2. Set immersive flags directly as fallback
+                    lines.insert(k+1, f"{indent}invoke-static {{p0}}, {helper_desc}->onPlayerAttached(Landroid/view/View;)V")
+                    lines.insert(k+2, f"{indent}const/16 v0, {flags}")
+                    lines.insert(k+3, f"{indent}invoke-virtual {{p0, v0}}, Landroid/view/View;->setSystemUiVisibility(I)V")
                     return "\n".join(lines), True
                 k += 1
     # not found: append a new override
     new_method = [
         "",
-        "# auto-injected by InstaPatchedTrueReel (immersive on real video surface)",
+        "# auto-injected by InstaPatchedTrueReel (immersive + helper hook on real video surface)",
         ".method public onAttachedToWindow()V",
         "    .locals 1",
         "    invoke-super {p0}, Landroid/view/View;->onAttachedToWindow()V",
+        f"    invoke-static {{p0}}, {helper_desc}->onPlayerAttached(Landroid/view/View;)V",
         f"    const/16 v0, {flags}",
         "    invoke-virtual {p0, v0}, Landroid/view/View;->setSystemUiVisibility(I)V",
         "    return-void",
