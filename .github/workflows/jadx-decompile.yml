@@ -5,8 +5,7 @@ on:
 
 jobs:
   decompile:
-    runs-on: blacksmith-8vcpu-ubuntu-2404   # ← best practical choice
-    # Alternative if you want even more power: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest          # works on any private repo
     timeout-minutes: 360
     steps:
       - name: Checkout repo (with LFS for the APK)
@@ -28,21 +27,19 @@ jobs:
 
       - name: Decompile with jadx (readable Java source)
         env:
-          JAVA_OPTS: "-Xmx12g -XX:+UseG1GC"
+          JAVA_OPTS: "-Xmx6g -XX:+UseG1GC"
         run: |
           mkdir -p jadx-out
           APK="Instagram-v435.0.0.37.76-patches-v3.8.0.apk"
           ./jadx/bin/jadx \
             -d jadx-out \
             --no-res \
-            --threads-count 8 \
+            --threads-count 4 \
             --show-bad-code \
             --log-level INFO \
             "$APK" 2>&1 | tee jadx.log | tail -50
           echo "=== java file count ==="
           find jadx-out -name "*.java" | wc -l
-          echo "=== sample tree ==="
-          find jadx-out -type d | head -10
 
       - name: Upload decompiled source
         uses: actions/upload-artifact@v4
