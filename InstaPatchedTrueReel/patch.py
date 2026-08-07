@@ -124,6 +124,74 @@ def patch_set_resize_fill(content, mode=3):
                 k += 1
     return content, False
 
+def patch_onmeasure_fill(content, class_type=None):
+    """Rewrite onMeasure(II)V to just call super.onMeasure(p1, p2).
+
+    This is the KEY patch for true full-screen reels. IG's reels video view
+    (com/instagram/feed/widget/IgProgressImageView) overrides onMeasure to
+    clamp its height to width/aspectRatio (e.g. 1080/0.5625 = 1920px), which
+    is shorter than a modern 9:19.5 screen (~2400px) — leaving the visible gap
+    below the video. By delegating to super.onMeasure (FrameLayout default),
+    the view honors its layout params (MATCH_PARENT) and fills the entire
+    ReelViewGroup (the full-screen FrameLayout root). Since the bars are
+    overlaid siblings in that FrameLayout, the video now plays BEHIND them
+    like TikTok."""
+    lines = content.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith(".method") and "onMeasure(II)V" in line:
+            if re.search(r"\b(abstract|native)\b", line):
+                continue
+            j = i + 1
+            while j < len(lines) and not lines[j].startswith(".end method"):
+                j += 1
+            if j >= len(lines):
+                continue
+            body = [
+                "    .locals 0",
+                "    invoke-super {p0, p1, p2}, Landroid/widget/FrameLayout;->onMeasure(II)V",
+                "    return-void",
+            ]
+            new_lines = lines[:i+1] + body + lines[j:]
+            return "\n".join(new_lines), True
+    return content, False
+
+def patch_immersive_on_attach(content):
+    """Inject immersive system-UI flags into onAttachedToWindow()V.
+    If the method exists, prepend the flags call; if not, add a new override.
+    Flags = 0x16ff = FULLSCREEN|HIDE_NAV|LAYOUT_STABLE|LAYOUT_FULLSCREEN|
+    LAYOUT_HIDE_NAV|IMMERSIVE_STICKY — hides status + nav bars, lays out
+    edge-to-edge, bars reappear transiently on swipe."""
+    flags = 0x16ff
+    lines = content.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith(".method") and "onAttachedToWindow()V" in line:
+            if re.search(r"\b(abstract|native)\b", line):
+                continue
+            k = i + 1
+            while k < len(lines) and not lines[k].startswith(".end method"):
+                m = re.match(r"^(\s*)\.locals\s+(\d+)", lines[k])
+                if m:
+                    indent = m.group(1)
+                    n = max(int(m.group(2)), 1)
+                    lines[k] = f"{indent}.locals {n}"
+                    lines.insert(k+1, f"{indent}const/16 v0, {flags}")
+                    lines.insert(k+2, f"{indent}invoke-virtual {{p0, v0}}, Landroid/view/View;->setSystemUiVisibility(I)V")
+                    return "\n".join(lines), True
+                k += 1
+    # not found: append a new override
+    new_method = [
+        "",
+        "# auto-injected by InstaPatchedTrueReel (immersive)",
+        ".method protected onAttachedToWindow()V",
+        "    .locals 1",
+        "    invoke-super {p0}, Landroid/view/View;->onAttachedToWindow()V",
+        f"    const/16 v0, {flags}",
+        "    invoke-virtual {p0, v0}, Landroid/view/View;->setSystemUiVisibility(I)V",
+        "    return-void",
+        ".end method",
+    ]
+    return "\n".join(lines + new_method), True
+
 def patch_playerview_hook(content, helper_desc="Lapp/truereels/TrueReelsHelper;"):
     """Inject a call to TrueReelsHelper.onPlayerAttached(p0) in PlayerView.onAttachedToWindow.
     If the method doesn't exist, add an override."""
@@ -225,6 +293,59 @@ def main():
                 resize_count += 1
                 print(f"    [resize->FILL] {os.path.relpath(f, decompiled)}")
     print(f"[*] setResizeMode forced to FILL(3) in {resize_count} class(es)")
+
+    # 4. *** THE KEY PATCH *** onMeasure -> super.onMeasure on reels video views
+    # IG's reels video surface (IgProgressImageView + other aspect-clamped views)
+    # overrides onMeasure to clamp height = width/aspectRatio, leaving a gap below
+    # the video on taller-than-9:16 screens. Delegating to super.onMeasure makes
+    # the view honor MATCH_PARENT and fill the full-screen ReelViewGroup, so the
+    # video plays edge-to-edge BEHIND the overlaid bars (TikTok-style).
+    onmeasure_targets = [
+        "IgProgressImageView.smali",          # THE reels video view (found in ReelViewGroup.onFinishInflate)
+        "FixedAspectRatioVideoLayout.smali",  # alt reels/feed video container
+        "FixedAspectRatioFrameLayout.smali",  # alt aspect-clamped frame
+        "MediaFrameLayout.smali",             # IG's media frame (setAspectRatio clamps it)
+        "SimpleZoomableViewContainer.smali",  # zoom container used in some reels
+        "AspectRatioLinearLayout.smali",      # aspect-clamped linear (reels variants)
+        "AspectRatioFrameLayout.smali",       # IG's own aspect frame (not media3)
+    ]
+    onmeasure_count = 0
+    for d in smali_dirs:
+        for root, _, fns in os.walk(d):
+            for name in onmeasure_targets:
+                if name in fns:
+                    f = os.path.join(root, name)
+                    try:
+                        content = open(f, encoding="utf-8", errors="ignore").read()
+                    except Exception:
+                        continue
+                    # only patch IG's own classes, not media3's AspectRatioFrameLayout
+                    # (media3's has a different onMeasure; we skip it here)
+                    cls = get_class_type(content)
+                    if cls and "media3" in cls:
+                        continue
+                    new, changed = patch_onmeasure_fill(content, class_type=cls)
+                    if changed:
+                        open(f, "w", encoding="utf-8").write(new)
+                        onmeasure_count += 1
+                        print(f"    [onMeasure->super] {os.path.relpath(f, decompiled)}")
+    print(f"[*] onMeasure -> super.onMeasure (fill parent) in {onmeasure_count} class(es)")
+
+    # 4b. Inject immersive flags into IgProgressImageView.onAttachedToWindow.
+    # This is the actual reels video view, so when it attaches we hide the
+    # system bars (status + nav) for true edge-to-edge.
+    immersive_count = 0
+    for d in smali_dirs:
+        for root, _, fns in os.walk(d):
+            if "IgProgressImageView.smali" in fns:
+                f = os.path.join(root, "IgProgressImageView.smali")
+                content = open(f, encoding="utf-8", errors="ignore").read()
+                new, changed = patch_immersive_on_attach(content)
+                if changed:
+                    open(f, "w", encoding="utf-8").write(new)
+                    immersive_count += 1
+                    print(f"    [immersive onAttach] {os.path.relpath(f, decompiled)}")
+    print(f"[*] immersive flags injected into IgProgressImageView.onAttachedToWindow ({immersive_count})")
 
     # 4. patch PlayerView.onAttachedToWindow -> helper hook (if helper enabled)
     hook_count = 0
