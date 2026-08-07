@@ -177,20 +177,23 @@ def patch_onsizechanged_stretch(content, class_type="LX/7ky;"):
     return content, False
 
 # ===========================================================================
-# Immersive flags + TrueReelsHelper hook injected into LX/7ky;->onAttachedToWindow
+# TrueReelsHelper hook injected into LX/7ky;->onAttachedToWindow
 # ===========================================================================
-def patch_immersive_on_attach_v2(content, class_type="LX/7ky;", helper_desc="Lapp/truereels/TrueReelsHelper;"):
-    """Inject into onAttachedToWindow()V of LX/7ky (the actual reels video surface
-    base class):
-      1. Call super.onAttachedToWindow (required)
-      2. Call TrueReelsHelper.onPlayerAttached(this) — the helper does:
-         - Makes all ancestors MATCH_PARENT (video fills screen edge-to-edge)
-         - Applies immersive + FLAG_LAYOUT_NO_LIMITS on the window (no black gap at top)
-         - Makes overlay bars transparent (TikTok-style translucent bars)
-         - Shows fullscreen button for horizontal videos
-      3. Set system UI flags 0x16ff (immersive sticky) directly as a fallback
+def patch_immersive_on_attach_v2(content, class_type="LX/7ky;", helper_desc="Lapp/truereels/TrueReelsHelper;", use_helper=True):
+    """Inject into onAttachedToWindow()V of LX/7ky (the video surface base class).
 
-    If the method exists, prepend the calls (after super); if not, add a new override.
+    When use_helper=True (helper dex available):
+      - ONLY inject: invoke-static TrueReelsHelper->onPlayerAttached(p0)
+      - The helper checks isInReelsContext() before doing anything, so it's safe
+        to run on ALL video surfaces (feed, stories, reels, ads). In reels it
+        hides system bars + shows fullscreen button. In feed/stories it does nothing.
+
+    When use_helper=False (--no-helper, no dex):
+      - Inject: setSystemUiVisibility(0x16ff) directly (no helper, no context check)
+      - This is less safe (hides system bars on ALL video surfaces, not just reels)
+        but it's a fallback if the helper fails to compile.
+
+    If the method exists, inject after .locals; if not, add a new override.
     """
     flags = 0x16ff
     lines = content.split("\n")
@@ -203,29 +206,41 @@ def patch_immersive_on_attach_v2(content, class_type="LX/7ky;", helper_desc="Lap
                 m = re.match(r"^(\s*)\.locals\s+(\d+)", lines[k])
                 if m:
                     indent = m.group(1)
-                    n = max(int(m.group(2)), 2)
+                    n = max(int(m.group(2)), 1)
                     lines[k] = f"{indent}.locals {n}"
-                    # Inject right after .locals:
-                    #   1. Call TrueReelsHelper.onPlayerAttached(p0) — does the heavy lifting
-                    #   2. Set immersive flags directly as fallback
-                    lines.insert(k+1, f"{indent}invoke-static {{p0}}, {helper_desc}->onPlayerAttached(Landroid/view/View;)V")
-                    lines.insert(k+2, f"{indent}const/16 v0, {flags}")
-                    lines.insert(k+3, f"{indent}invoke-virtual {{p0, v0}}, Landroid/view/View;->setSystemUiVisibility(I)V")
+                    if use_helper:
+                        # Only inject the helper hook — it does everything conditionally.
+                        lines.insert(k+1, f"{indent}invoke-static {{p0}}, {helper_desc}->onPlayerAttached(Landroid/view/View;)V")
+                    else:
+                        # No helper — inject setSystemUiVisibility directly.
+                        lines.insert(k+1, f"{indent}const/16 v0, {flags}")
+                        lines.insert(k+2, f"{indent}invoke-virtual {{p0, v0}}, Landroid/view/View;->setSystemUiVisibility(I)V")
                     return "\n".join(lines), True
                 k += 1
     # not found: append a new override
-    new_method = [
-        "",
-        "# auto-injected by InstaPatchedTrueReel (immersive + helper hook on real video surface)",
-        ".method public onAttachedToWindow()V",
-        "    .locals 1",
-        "    invoke-super {p0}, Landroid/view/View;->onAttachedToWindow()V",
-        f"    invoke-static {{p0}}, {helper_desc}->onPlayerAttached(Landroid/view/View;)V",
-        f"    const/16 v0, {flags}",
-        "    invoke-virtual {p0, v0}, Landroid/view/View;->setSystemUiVisibility(I)V",
-        "    return-void",
-        ".end method",
-    ]
+    if use_helper:
+        new_method = [
+            "",
+            "# auto-injected by InstaPatchedTrueReel (helper hook on video surface)",
+            ".method public onAttachedToWindow()V",
+            "    .locals 0",
+            "    invoke-super {p0}, Landroid/view/View;->onAttachedToWindow()V",
+            f"    invoke-static {{p0}}, {helper_desc}->onPlayerAttached(Landroid/view/View;)V",
+            "    return-void",
+            ".end method",
+        ]
+    else:
+        new_method = [
+            "",
+            "# auto-injected by InstaPatchedTrueReel (immersive flags, no helper)",
+            ".method public onAttachedToWindow()V",
+            "    .locals 1",
+            "    invoke-super {p0}, Landroid/view/View;->onAttachedToWindow()V",
+            f"    const/16 v0, {flags}",
+            "    invoke-virtual {p0, v0}, Landroid/view/View;->setSystemUiVisibility(I)V",
+            "    return-void",
+            ".end method",
+        ]
     return "\n".join(lines + new_method), True
 
 # ===========================================================================
@@ -404,7 +419,7 @@ def main():
     if sevenky_path and os.path.exists(sevenky_path):
         try:
             content = open(sevenky_path, encoding="utf-8", errors="ignore").read()
-            new, changed = patch_immersive_on_attach_v2(content, class_type="LX/7ky;")
+            new, changed = patch_immersive_on_attach_v2(content, class_type="LX/7ky;", use_helper=use_helper)
             if changed:
                 open(sevenky_path, "w", encoding="utf-8").write(new)
                 immersive_count += 1
