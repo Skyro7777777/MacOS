@@ -34,7 +34,7 @@ jobs:
           unzip -q jadx.zip -d jadx
           chmod +x jadx/bin/jadx
 
-      - name: Decompile with jadx (readable Java source)
+      - name: Decompile with jadx (best quality)
         env:
           JAVA_OPTS: "-Xmx12g -XX:+UseG1GC"
         run: |
@@ -46,6 +46,7 @@ jobs:
             --threads-count 6 \
             --show-bad-code \
             --deobf \
+            --deobf-use-sourcename \
             --decompilation-mode restructure \
             --log-level INFO \
             "$APK" 2>&1 | tee jadx.log | tail -50
