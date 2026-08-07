@@ -45,15 +45,23 @@ jobs:
             --no-res \
             --threads-count 6 \
             --show-bad-code \
+            --deobf \
+            --decompilation-mode restructure \
             --log-level INFO \
             "$APK" 2>&1 | tee jadx.log | tail -50
           echo "=== java file count ==="
           find jadx-out -name "*.java" | wc -l
 
+      - name: Zip decompiled source
+        run: |
+          echo "Creating zip..."
+          zip -r -q instagram-decompiled.zip jadx-out/
+          ls -lh instagram-decompiled.zip
+
       - name: Upload decompiled source
         uses: actions/upload-artifact@v4
         with:
           name: instagram-decompiled-java
-          path: jadx-out/
+          path: instagram-decompiled.zip
           retention-days: 14
           if-no-files-found: error
