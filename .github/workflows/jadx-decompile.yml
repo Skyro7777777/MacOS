@@ -5,9 +5,18 @@ on:
 
 jobs:
   decompile:
-    runs-on: ubuntu-latest          # works on any private repo
+    runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
+      - name: Show runner specs
+        run: |
+          echo "========== RUNNER SPECS =========="
+          echo "CPU cores : $(nproc)"
+          echo "Memory    : $(free -h | awk '/Mem:/ {print $2}')"
+          echo "Disk      : $(df -h / | awk 'NR==2 {print $2}')"
+          echo "Hostname  : $(hostname)"
+          echo "=================================="
+
       - name: Checkout repo (with LFS for the APK)
         uses: actions/checkout@v4
         with:
@@ -27,14 +36,14 @@ jobs:
 
       - name: Decompile with jadx (readable Java source)
         env:
-          JAVA_OPTS: "-Xmx6g -XX:+UseG1GC"
+          JAVA_OPTS: "-Xmx12g -XX:+UseG1GC"
         run: |
           mkdir -p jadx-out
           APK="Instagram-v435.0.0.37.76-patches-v3.8.0.apk"
           ./jadx/bin/jadx \
             -d jadx-out \
             --no-res \
-            --threads-count 4 \
+            --threads-count 6 \
             --show-bad-code \
             --log-level INFO \
             "$APK" 2>&1 | tee jadx.log | tail -50
