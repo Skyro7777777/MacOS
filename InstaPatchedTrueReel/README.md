@@ -1,82 +1,116 @@
-# InstaPatchedTrueReel
+# InstaPatchedTrueReel (clean rewrite)
 
 Patches the ReVanced Instagram APK (`Instagram-v435.0.0.37.76-patches-v3.8.0.apk`) so Reels
-play at **true full-screen 9:16 — stretch, no crop, video behind the bars — like TikTok.**
+play **TikTok-style**: edge-to-edge video behind transparent overlay bars + a working
+fullscreen button for 16:9 videos.
 
-This folder + the workflow in `.github/workflows/insta-patched-true-reel.yml` build the patched
-APK in GitHub Actions and upload it as an artifact. Download it from the **Actions** tab →
-latest run → **Instagram-true916-patched** artifact.
+This is a **complete clean rewrite** — the previous versions (v2–v8) accumulated harmful
+smali patches that crashed the comment bar and hid status-bar icons. This version does the
+**minimum in smali** (2 verified patches) and pushes **all bar-transparency + fullscreen
+logic into the runtime helper**, which can walk the live view tree and handle Litho
+re-mounts dynamically.
 
-## Root cause (found by reading jadx-decompiled Java source)
+## What was wrong before (and why this rewrite)
 
-The previous patch versions (runs #1–#4) targeted the WRONG classes. The actual mechanism:
+| Old problem | Root cause | Fix in this rewrite |
+|---|---|---|
+| Comment bar "Add comment…" vanished | v8 nulled resource `0x7f08042f` → `LX/4rT;->A0N(ctx, 0)` throws → XIU Litho component replaced with error placeholder | **Removed** all bar-resource nulling. Helper detects `GradientDrawable` and calls `setColor(TRANSPARENT)` to kill the black fill **while preserving the white stroke** |
+| Status bar "only wifi info hidden" | v8 injected `setSystemUiVisibility(0x16ff)` which includes `FULLSCREEN`/`HIDE_NAVIGATION`/`IMMERSIVE` flags | **Removed** all immersive-flag injection. Helper uses layout-only flags `0x700` (bars stay VISIBLE + TRANSPARENT, video renders behind) |
+| Status bar black strip | `InstagramMainActivity.onResume` sets status bar color to BLACK, overriding the helper's transparent | Helper **re-applies** `setStatusBarColor(TRANSPARENT)` on every layout pass + every 200ms rescan → defeats the onResume override within ~200ms |
+| Main bottom nav bar ~80% black | Tab bar is a plain `FrameLayout` (id `0x7f0b3f67`) with `setBackgroundColor(~80% black)`. Old helper missed it (not a known class name + alpha threshold 150 skipped the ~51-alpha color) | Helper adds **explicit ID-based lookup** for `tab_bar`/`ls_nav_bar` + lowers alpha threshold from 150 → 1 |
+| Fullscreen button "does nothing" | `setRequestedOrientation(LANDSCAPE)` was ignored (activity portrait-locked in manifest) / broke the layout | **No activity rotation.** Helper transforms the `TextureView` in-place: `setRotation(90)` + `setScaleX/Y` fills the portrait screen with landscape video. ViewPager2 swipe locked. Overlay with exit + prev/next tap zones added to decorView |
 
-- IG's reels video surface is `Lcom/instagram/ui/simplevideolayout/SimpleVideoLayout;`
-  (id `clips_video_layout` / `clips_video_container`), which extends `LX/7ky;`
-  (jadx name: `AbstractC210917ky`, internally called "VideoFrameLayout").
-- `LX/7ky;` extends `FrameLayout` and contains a `TextureView A02` field — the actual
-  video surface.
-- `LX/7ky;->onSizeChanged(IIII)V` overrides the default to compute the TextureView's
-  width/height via `LX/25U;->A00(...)` based on the VIDEO ASPECT RATIO, then sets
-  `FrameLayout.LayoutParams(w, h)` + translation X/Y on the TextureView.
-- For a 9:16 video (aspect 0.5625) on a 9:19.5 screen (aspect 0.4615), the "fit" mode
-  returns width=1080, height=1920 — centered on a 1080×2400 screen, leaving 240px gaps
-  top + bottom. **THIS is the visible gap above & below the reel.**
+## The 2 smali patches (both evidence-backed from jadx source)
 
-Previous patches (media3 PlayerView, IgProgressImageView.onMeasure) had no effect because:
-- `IgProgressImageView` is just the poster image (extends FrameLayout containing an
-  IgImageView + ProgressBar), NOT the video surface.
-- media3 `PlayerView` / `AspectRatioFrameLayout` are not used by the swipeable reels feed.
+### Patch A — `LX/7ky;->onSizeChanged(IIII)V` → TextureView MATCH_PARENT  [KEY]
 
-## The fix (v2)
+**Root cause** (confirmed in `AbstractC210917ky.java` line 146, jadx class =
+`AbstractC210917ky`, smali `X/7ky`):
+- IG's reels video surface is `SimpleVideoLayout` (extends `LX/7ky`).
+- `LX/7ky` has field `A02: TextureView` (the actual video surface) and field
+  `A04: C160765mH` (mediaInfo with aspect-ratio field `A03: Double`).
+- `onSizeChanged` computes the TextureView size via `C25U.A00` based on the video
+  aspect ratio → letterboxed view (e.g. 1080×1920 centered on 1080×2400 screen →
+  240px gaps top + bottom).
+- This patch rewrites `onSizeChanged` to set `A02` layout params to
+  `FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)` with translation X/Y = 0,
+  bypassing the aspect math → video stretches edge-to-edge.
 
-| # | Patch | Smali change | Effect |
-|---|-------|--------------|--------|
-| 1 | **Stretch TextureView to fill** (KEY) | `LX/7ky;->onSizeChanged(IIII)V` rewritten to set `A02` (TextureView) layout params to `FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)` with translation X/Y = 0 | Bypasses the aspect-ratio math; video stretches to fill the SimpleVideoLayout (which already fills C3EO → ReelViewGroup → screen) edge-to-edge. **Stretch, no crop, no letterbox.** |
-| 2 | **Immersive on real video surface** (KEY) | `LX/7ky;->onAttachedToWindow()V` injects `setSystemUiVisibility(0x16ff)` | Hides status + nav bars when the actual reels video surface attaches (not media3 PlayerView, which reels doesn't use). |
-| 3 | setAspectRatio no-op (legacy, harmless) | `setAspectRatio(F)V` → no-op on media3 AspectRatioFrameLayout | Neutralises the aspect clamp on media3 surfaces (reels doesn't use these, but other IG surfaces might). |
-| 4 | setResizeMode FILL (legacy, harmless) | `setResizeMode(I)V` → `const/4 p1, 3` | Forces RESIZE_MODE_FILL (stretch) on media3 surfaces. |
-| 5 | IgProgressImageView.onMeasure super (legacy, harmless) | `onMeasure(II)V` → `super.onMeasure(p1, p2)` | Makes the poster image fill its parent (doesn't affect video, but consistent). |
-| 6 | PlayerView helper hook (for fullscreen button) | `media3/ui/PlayerView.onAttachedToWindow` → `TrueReelsHelper.onPlayerAttached(view)` | Hooks the fullscreen-button helper (PlayerView isn't used by reels feed, but may exist in other IG surfaces). |
+### Patch B — `LX/7ky;->onAttachedToWindow()V` → helper hook  [KEY]
 
-## Fullscreen button for horizontal videos (TikTok-style)
+Injects `invoke-static TrueReelsHelper->onPlayerAttached(Landroid/view/View;)V` at
+the start of `onAttachedToWindow`. The helper checks `findReelsRoot()` and returns
+early if not in the reels context (safe for feed/stories/ads).
 
-`TrueReelsHelper.java` is compiled to a separate `classesN.dex` and merged into the APK.
-It hooks `PlayerView.onAttachedToWindow`, polls the player's `getVideoSize()`, and when it
-detects a horizontal video (width > height), shows a fullscreen toggle button (top-right).
-Tapping it toggles the reels frame between `RESIZE_MODE_FILL` (stretch) and `RESIZE_MODE_ZOOM`
-(crop-to-fill).
+## What the runtime helper does (`TrueReelsHelper.java`)
 
-> Note: PlayerView isn't used by the swipeable reels feed, so this button may not appear on
-> reels — it's primarily for other IG video surfaces. The core stretch fix (patch #1) applies
-> to all videos regardless.
+Compiled to a separate `classesN.dex` and merged into the APK. On every video
+surface attach (in reels context):
+
+1. **Window transparency** — `setStatusBarColor(TRANSPARENT)` +
+   `setNavigationBarColor(TRANSPARENT)` + `setSystemUiVisibility(0x700)` +
+   `setDecorFitsSystemWindows(false)`. **Re-applied on every layout pass + every
+   200ms** to defeat IG's `onResume` override.
+2. **Video chain fill** — walks up from the TextureView to the reels root, sets
+   every ancestor to `MATCH_PARENT` + `setFitsSystemWindows(false)` +
+   `setClipChildren(false)` so the video extends behind the system bars.
+3. **Bar transparency** — walks the entire decorView tree:
+   - Explicit ID lookup for `tab_bar` (0x7f0b3f67), `ls_nav_bar` (0x7f0b248e) + shadows.
+   - Class-name matching for known bar classes (`ClipsViewerNavigationBar`, etc.).
+   - Position+opacity heuristic for unknown bars (top/bottom of screen + alpha ≥ 1).
+   - **GradientDrawable** backgrounds: `setColor(TRANSPARENT)` kills the fill,
+     **keeps the stroke** (the white outline of the comment box).
+   - Other backgrounds: `mutate().setAlpha(0)` + `setBackgroundColor(TRANSPARENT)`.
+4. **Fullscreen button** — added to the Activity's `decorView` (above all IG touch
+   interceptors). Polls `getVideoSize()` (reflects on `A04` mediaInfo → `A03`
+   aspect Double). Shows only for landscape videos (aspect > 1.15).
+5. **Fullscreen transform** (on button tap):
+   - `sIsLandscape = true`, lock ViewPager2 (`setUserInputEnabled(false)` via reflection).
+   - `TextureView.setRotation(90)` + `setScaleX(screenH/screenW)` +
+     `setScaleY(screenW/screenH)` → video fills the portrait screen in landscape
+     orientation (math verified: the rotated+scaled quad fills exactly).
+   - Hide IG overlay bars (INVISIBLE) so the fullscreen is clean.
+   - Add overlay to decorView: exit button (top-right) + left 40% tap zone (prev
+     reel) + right 40% tap zone (next reel) → scrollable landscape feed.
+   - On swipe-advance (`onPlayerAttached` fires for new video): re-apply transform
+     to new TextureView; auto-exit if new video isn't 16:9.
 
 ## Files
 
-- `patch.py` — main patcher script (apktool decompile → smali patches → recompile →
-  merge helper.dex → sign).
-- `TrueReelsHelper.java` — runtime helper for the fullscreen button (compiled to dex, merged).
+- `patch.py` — patcher (apktool decompile → 2 smali patches → recompile → merge
+  helper.dex → sign).
+- `TrueReelsHelper.java` — runtime helper (window transparency, bar transparency,
+  fullscreen button + transform). Compiled to dex, merged.
 - `../.github/workflows/insta-patched-true-reel.yml` — GitHub Actions workflow.
 
 ## How to build
 
-The workflow runs automatically on push to this folder, or manually via the Actions tab
-(**InstaPatchedTrueReel** → **Run workflow**). The patched, signed APK is uploaded as the
-`Instagram-true916-patched` artifact (30-day retention).
+The workflow runs automatically on push to this folder, or manually via the
+Actions tab (**InstaPatchedTrueReel** → **Run workflow**). The patched, signed APK
+is uploaded as the `Instagram-true916-patched` artifact (30-day retention).
 
 ## Install
 
-1. The patched APK is re-signed with a debug key, so **uninstall the stock Instagram first**
-   (signatures differ; Android won't allow install-over).
+1. The patched APK is re-signed with a debug key, so **uninstall the stock
+   Instagram first** (signatures differ; Android won't allow install-over).
 2. Allow "Install unknown apps" for your browser/Files app.
-3. Install the APK. Log in (try a secondary account first — modded clients can trip Meta's checks).
-4. Open Reels — the video now fills edge-to-edge behind the bars.
+3. Install the APK. Log in (try a secondary account first — modded clients can
+   trip Meta's checks).
+4. Open Reels — the video now fills edge-to-edge behind the (transparent) bars.
+   For 16:9 videos, a fullscreen button appears top-right; tap it for landscape
+   fullscreen with prev/next tap zones.
 
 ## Honesty / limitations
 
-- The patching pipeline is fully verified (apktool + smali + sign produces a valid installable APK).
-- The on-device visual result depends on whether `LX/7ky;` is truly the only class controlling
-  the reels video surface size. If the video still doesn't fill the screen, there may be
-  additional clamping in `C3EO` (the wrapper around SimpleVideoLayout) or in the Litho
-  component tree that hosts C3EO. The next debugging step would be to also patch
-  `LX/3EO;` (C3EO) onMeasure/onSizeChanged, or trace the Litho layout.
+- The 2 smali patches are fully verified against the jadx-decompiled source
+  (`AbstractC210917ky.java` confirms `A02: TextureView`, `onSizeChanged`,
+  `onAttachedToWindow`).
+- The fullscreen transform uses `TextureView.setRotation(90)` + scale. This is
+  verified math (the quad fills the screen exactly) but the video will have a
+  mild horizontal stretch on phones wider than 16:9 (e.g. 20:9 screens show a
+  16:9 video stretched ~1.25× horizontally) — similar to TikTok's "fill" mode.
+- The bar transparency relies on runtime view-tree walking + rescan. If IG adds
+  new bar classes in a future version, they may not be caught until
+  `BAR_CLASS_NAMES` is updated — but the position+opacity heuristic catches most.
+- d8 compiler limitation: only single-level anonymous inner classes are used
+  (no anonymous class nested inside another anonymous class).
