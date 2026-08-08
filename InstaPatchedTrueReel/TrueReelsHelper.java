@@ -793,7 +793,7 @@ public class TrueReelsHelper {
             overlay.setTag(TAG_OVERLAY);
 
             // Exit button (top-right)
-            View exitBtn = makeButton(videoView.getContext());
+            ImageView exitBtn = makeButton(videoView.getContext());
             exitBtn.setImageResource(android.R.drawable.ic_menu_close_clear_cancel);
             FrameLayout.LayoutParams exitLp = new FrameLayout.LayoutParams(
                     dp(videoView, 40), dp(videoView, 40),
@@ -1077,7 +1077,7 @@ public class TrueReelsHelper {
         return null;
     }
 
-    private static View makeButton(Context ctx) {
+    private static ImageView makeButton(Context ctx) {
         ImageView b = new ImageView(ctx);
         b.setImageResource(android.R.drawable.ic_menu_crop);
         b.setBackgroundColor(0x66000000);
