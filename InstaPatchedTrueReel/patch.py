@@ -194,12 +194,14 @@ def patch_onsizechanged_stretch(content, class_type="LX/7ky;"):
 # ===========================================================================
 
 # Map of resource-id-hex -> replacement (0 = null the resource so getDrawable returns null)
+# NOTE: bg_legibility_gradient_top (0x7f0802cf) was REMOVED in v8.2 — it's NOT a bar
+# background, it's a legibility gradient used in many non-bar contexts (Litho component
+# gradients, filter overlays, Reels ad cards). Nulling it crashed the app after login.
 BAR_RESOURCE_REPLACEMENTS = {
     "0x7f080408": "0x0",  # clips_composer_background
     "0x7f080409": "0x0",  # clips_composer_background_direct
     "0x7f08042b": "0x0",  # clips_viewer_action_bar_gradient_background
     "0x7f08042f": "0x0",  # clips_viewer_comment_bar_background
-    "0x7f0802cf": "0x0",  # bg_legibility_gradient_top
     "0x7f08200d": "0x0",  # igds_bottom_sheet_background_prism
 }
 
@@ -212,6 +214,10 @@ def patch_bar_resource_ids(content):
 
     This is a broad sweep — it catches every call site that loads these resource IDs.
     Safe because getDrawable(0) simply returns null (resource 0 is invalid).
+    NOTE: Only run this on TARGETED files (files the subagents analyzed). The broad
+    sweep over ALL smali files was REMOVED in v8.2 because it patched files that
+    used these resource IDs for non-bar purposes (legibility gradients, ad cards)
+    which caused runtime crashes.
     """
     changed_count = 0
     lines = content.split("\n")
@@ -325,6 +331,9 @@ def patch_bar_backgrounds_phase_b(smali_dirs, decompiled):
     files_touched = set()
 
     # Targeted files first (the ones we know about from subagent exploration)
+    # NOTE: X/2Iv.smali uses bg_legibility_gradient_top (0x7f0802cf) which was REMOVED
+    # from BAR_RESOURCE_REPLACEMENTS in v8.2. It still uses clips_viewer_action_bar_gradient_background
+    # (0x7f08042b) which IS in the list, so the patch still hits the action bar fallback.
     targeted_files = [
         # (relpath, description)
         ("X/XIU.smali", "Comment Litho bar bg (clips_viewer_comment_bar_background)"),
@@ -340,7 +349,7 @@ def patch_bar_backgrounds_phase_b(smali_dirs, decompiled):
         ("com/instagram/igds/components/bottomsheet/BottomSheetFragment.smali", "Comment sheet bg + status bar tint"),
     ]
 
-    print("\n[*] === PHASE B: Bar background smali patches (v8) ===")
+    print("\n[*] === PHASE B: Bar background smali patches (v8.2) ===")
 
     # 1. Targeted files
     for relpath, desc in targeted_files:
@@ -379,46 +388,15 @@ def patch_bar_backgrounds_phase_b(smali_dirs, decompiled):
         else:
             print(f"    [no-op]   {os.path.relpath(f, decompiled)} ({desc}): no matching consts")
 
-    # 2. Broad sweep: scan ALL smali files for the resource IDs (catches any missed call sites)
-    print("\n[*] === PHASE B broad sweep: scanning all smali files ===")
+    # 2. Broad sweep: REMOVED in v8.2.
+    # The broad sweep scanned ALL smali files for resource IDs and nulled them.
+    # This crashed the app because bg_legibility_gradient_top (0x7f0802cf) was used
+    # in non-bar contexts (Litho component gradients, filter overlays, Reels ad cards).
+    # Even after removing 0x7f0802cf from BAR_RESOURCE_REPLACEMENTS, the broad sweep
+    # is still risky — other resource IDs might also be used in non-bar contexts.
+    # Only targeted patches (files analyzed by subagents) are safe.
     broad_count = 0
-    for d in smali_dirs:
-        for root, _, fns in os.walk(d):
-            for name in fns:
-                if not name.endswith(".smali"):
-                    continue
-                f = os.path.join(root, name)
-                if f in files_touched:
-                    continue
-                try:
-                    content = open(f, encoding="utf-8", errors="ignore").read()
-                except Exception:
-                    continue
-                # Quick check: does it contain any of our target resource IDs?
-                if not any(rid in content for rid in BAR_RESOURCE_REPLACEMENTS.keys()):
-                    continue
-                # Also check for the status bar tint color
-                has_tint = "0x7f060058" in content
-                if not has_tint:
-                    orig = content
-                    content, c1 = patch_bar_resource_ids(content)
-                    if content != orig:
-                        open(f, "w", encoding="utf-8").write(content)
-                        broad_count += c1
-                        files_touched.add(f)
-                        print(f"    [broad]   {os.path.relpath(f, decompiled)}: {c1} resource IDs nulled")
-                    continue
-                # Has tint color — apply both
-                orig = content
-                content, c1 = patch_bar_resource_ids(content)
-                content, c2 = patch_status_bar_tint_color(content)
-                if content != orig:
-                    open(f, "w", encoding="utf-8").write(content)
-                    broad_count += c1
-                    total_tint += c2
-                    files_touched.add(f)
-                    print(f"    [broad]   {os.path.relpath(f, decompiled)}: {c1} res, {c2} tint")
-    print(f"[*] Phase B broad sweep: {broad_count} additional resource IDs nulled across {len(files_touched)} total files")
+    print(f"[*] Phase B broad sweep: SKIPPED (v8.2 — broad sweep caused runtime crashes)")
     print(f"[*] Phase B total: {total_res + broad_count} resource IDs, {total_tint} status-bar tints, {total_alpha} reply-bar alphas")
     return total_res + broad_count, total_tint, total_alpha
 
