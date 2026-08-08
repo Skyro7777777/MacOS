@@ -177,6 +177,222 @@ def patch_onsizechanged_stretch(content, class_type="LX/7ky;"):
     return content, False
 
 # ===========================================================================
+# PHASE B (v8): Bar background smali patches
+# Patches found by 4 parallel subagents (SA-A, SA-B, SA-C, SA-D) that explored
+# the jadx-decompiled Instagram source. These patches permanently neutralize
+# bar backgrounds at the source (smali) — Litho cannot undo them.
+#
+# Resource IDs (from com/instagram/android/R.java):
+#   0x7f080408 = clips_composer_background
+#   0x7f080409 = clips_composer_background_direct
+#   0x7f08042b = clips_viewer_action_bar_gradient_background
+#   0x7f08042f = clips_viewer_comment_bar_background
+#   0x7f0802cf = bg_legibility_gradient_top
+#   0x7f08200d = igds_bottom_sheet_background_prism
+#   0x7f060058 = bds_black_50_transparent (status bar tint when sheet opens)
+#   0x7f0600a9 = bds_transparent
+# ===========================================================================
+
+# Map of resource-id-hex -> replacement (0 = null the resource so getDrawable returns null)
+BAR_RESOURCE_REPLACEMENTS = {
+    "0x7f080408": "0x0",  # clips_composer_background
+    "0x7f080409": "0x0",  # clips_composer_background_direct
+    "0x7f08042b": "0x0",  # clips_viewer_action_bar_gradient_background
+    "0x7f08042f": "0x0",  # clips_viewer_comment_bar_background
+    "0x7f0802cf": "0x0",  # bg_legibility_gradient_top
+    "0x7f08200d": "0x0",  # igds_bottom_sheet_background_prism
+}
+
+def patch_bar_resource_ids(content):
+    """Replace bar-background resource ID constants with 0x0 across ALL smali files.
+
+    For each const instruction loading a known bar-background drawable resource ID,
+    replace the immediate value with 0x0 so Context.getDrawable(0) returns null.
+    Handles both `const/16 vN, 0x7f08XXXX` and `const vN, 0x7f08XXXX` forms.
+
+    This is a broad sweep — it catches every call site that loads these resource IDs.
+    Safe because getDrawable(0) simply returns null (resource 0 is invalid).
+    """
+    changed_count = 0
+    lines = content.split("\n")
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        # Match: const v0, 0x7f08XXXX  OR  const/16 v0, 0x7f08XXXX
+        m = re.match(r"^(\s*)(const(?:/16)?\s+v\d+,\s+)(0x7f080[0-9a-f]{3})\s*$", stripped)
+        if m:
+            indent_prefix = line[:len(line) - len(line.lstrip())]
+            instr = m.group(2)
+            res_id = m.group(3)
+            if res_id in BAR_RESOURCE_REPLACEMENTS:
+                replacement = BAR_RESOURCE_REPLACEMENTS[res_id]
+                # Use const/4 for small values (0x0 fits in 4 bits)
+                new_instr = "const/4 " if instr.startswith("const/16") and int(replacement, 16) <= 7 else instr
+                lines[i] = f"{indent_prefix}{new_instr}v0, {replacement}  # PATCHED: was {res_id}"
+                changed_count += 1
+    return "\n".join(lines), changed_count
+
+def patch_status_bar_tint_color(content):
+    """In BottomSheetFragment.onResume, replace the status-bar tint color
+    0x7f060058 (bds_black_50_transparent) with 0x7f0600a9 (bds_transparent).
+
+    This makes the status bar fully transparent when the comment sheet opens,
+    instead of a 50% black tint.
+    """
+    lines = content.split("\n")
+    changed = 0
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if "const" in stripped and "0x7f060058" in stripped:
+            indent_prefix = line[:len(line) - len(line.lstrip())]
+            # Replace the color resource ID with bds_transparent
+            m = re.match(r"^(\s*)(const(?:/16)?\s+v\d+,\s+)0x7f060058\s*$", stripped)
+            if m:
+                lines[i] = f"{indent_prefix}const v0, 0x7f0600a9  # PATCHED: was 0x7f060058 (bds_black_50_transparent) -> bds_transparent"
+                changed += 1
+    return "\n".join(lines), changed
+
+def patch_reply_bar_alpha(content):
+    """In C47965IHv.FDA (reply bar controller), replace alpha=204 (0xcc) with 0.
+
+    The inactive reply bar has alpha=204 (80% opaque). Patch to 0 (fully transparent).
+    Only patches the const/16 vX, 0xcc instruction (the inactive-state alpha).
+    """
+    lines = content.split("\n")
+    changed = 0
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        # Match: const/16 vX, 0xcc  (alpha = 204)
+        m = re.match(r"^(\s*)(const/16\s+v\d+,\s+)0xcc\s*$", stripped)
+        if m:
+            indent_prefix = line[:len(line) - len(line.lstrip())]
+            lines[i] = f"{indent_prefix}const/4 v0, 0x0  # PATCHED: was 0xcc (alpha=204) -> 0 (transparent)"
+            changed += 1
+    return "\n".join(lines), changed
+
+def find_smali_file(smali_dirs, relpath):
+    """Find a smali file by its relative path (e.g. 'X/7ky.smali') across all
+    smali_classes* directories. Returns the full path or None."""
+    for d in smali_dirs:
+        candidate = os.path.join(d, relpath)
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+def patch_bar_backgrounds_phase_b(smali_dirs, decompiled):
+    """Phase B v8: Patch ALL bar-background resource IDs across the entire APK.
+
+    Strategy: scan EVERY .smali file in EVERY smali_classes* dir for const
+    instructions loading the known bar-background drawable resource IDs, and
+    replace them with 0x0. This is a broad sweep that catches every call site.
+
+    Also patches:
+      - Status bar tint color (0x7f060058 -> 0x7f0600a9) in BottomSheetFragment
+      - Reply bar alpha (0xcc -> 0x0) in C47965IHv
+    """
+    total_res = 0
+    total_tint = 0
+    total_alpha = 0
+    files_touched = set()
+
+    # Targeted files first (the ones we know about from subagent exploration)
+    targeted_files = [
+        # (relpath, description)
+        ("X/XIU.smali", "Comment Litho bar bg (clips_viewer_comment_bar_background)"),
+        ("X/2Iv.smali", "Action bar bg source (A03 method)"),
+        ("X/ANg.smali", "Reels comment bar controller"),
+        ("X/IHv.smali", "Reply bar controller (alpha patch)"),
+        ("X/331.smali", "Reply bar composer dynamic bg override"),
+        ("X/ZZ0.smali", "DM composer bg"),
+        ("X/Jst.smali", "Merged feeds action bar bg"),
+        ("X/IHG.smali", "Stories draft preview gradient"),
+        ("instagram/features/clips/viewer/navigationbar/ClipsViewerNavigationBar.smali", "Bottom nav bar gradient"),
+        ("instagram/features/clips/viewer/actionbar/ClipsViewerActionBar.smali", "Action bar bg"),
+        ("com/instagram/igds/components/bottomsheet/BottomSheetFragment.smali", "Comment sheet bg + status bar tint"),
+    ]
+
+    print("\n[*] === PHASE B: Bar background smali patches (v8) ===")
+
+    # 1. Targeted files
+    for relpath, desc in targeted_files:
+        f = find_smali_file(smali_dirs, relpath)
+        if f is None:
+            print(f"    [!] NOT FOUND: {relpath} ({desc})")
+            continue
+        try:
+            content = open(f, encoding="utf-8", errors="ignore").read()
+        except Exception:
+            continue
+        orig = content
+
+        # Apply resource-ID replacement
+        content, c1 = patch_bar_resource_ids(content)
+
+        # Apply status-bar tint replacement (only BottomSheetFragment)
+        if "BottomSheetFragment" in relpath:
+            content, c2 = patch_status_bar_tint_color(content)
+            total_tint += c2
+        else:
+            c2 = 0
+
+        # Apply reply-bar alpha replacement (only C47965IHv / IHv.smali)
+        if relpath == "X/IHv.smali":
+            content, c3 = patch_reply_bar_alpha(content)
+            total_alpha += c3
+        else:
+            c3 = 0
+
+        if content != orig:
+            open(f, "w", encoding="utf-8").write(content)
+            total_res += c1
+            files_touched.add(f)
+            print(f"    [PATCHED] {os.path.relpath(f, decompiled)} ({desc}): {c1} res, {c2} tint, {c3} alpha")
+        else:
+            print(f"    [no-op]   {os.path.relpath(f, decompiled)} ({desc}): no matching consts")
+
+    # 2. Broad sweep: scan ALL smali files for the resource IDs (catches any missed call sites)
+    print("\n[*] === PHASE B broad sweep: scanning all smali files ===")
+    broad_count = 0
+    for d in smali_dirs:
+        for root, _, fns in os.walk(d):
+            for name in fns:
+                if not name.endswith(".smali"):
+                    continue
+                f = os.path.join(root, name)
+                if f in files_touched:
+                    continue
+                try:
+                    content = open(f, encoding="utf-8", errors="ignore").read()
+                except Exception:
+                    continue
+                # Quick check: does it contain any of our target resource IDs?
+                if not any(rid in content for rid in BAR_RESOURCE_REPLACEMENTS.keys()):
+                    continue
+                # Also check for the status bar tint color
+                has_tint = "0x7f060058" in content
+                if not has_tint:
+                    orig = content
+                    content, c1 = patch_bar_resource_ids(content)
+                    if content != orig:
+                        open(f, "w", encoding="utf-8").write(content)
+                        broad_count += c1
+                        files_touched.add(f)
+                        print(f"    [broad]   {os.path.relpath(f, decompiled)}: {c1} resource IDs nulled")
+                    continue
+                # Has tint color — apply both
+                orig = content
+                content, c1 = patch_bar_resource_ids(content)
+                content, c2 = patch_status_bar_tint_color(content)
+                if content != orig:
+                    open(f, "w", encoding="utf-8").write(content)
+                    broad_count += c1
+                    total_tint += c2
+                    files_touched.add(f)
+                    print(f"    [broad]   {os.path.relpath(f, decompiled)}: {c1} res, {c2} tint")
+    print(f"[*] Phase B broad sweep: {broad_count} additional resource IDs nulled across {len(files_touched)} total files")
+    print(f"[*] Phase B total: {total_res + broad_count} resource IDs, {total_tint} status-bar tints, {total_alpha} reply-bar alphas")
+    return total_res + broad_count, total_tint, total_alpha
+
+# ===========================================================================
 # TrueReelsHelper hook injected into LX/7ky;->onAttachedToWindow
 # ===========================================================================
 def patch_immersive_on_attach_v2(content, class_type="LX/7ky;", helper_desc="Lapp/truereels/TrueReelsHelper;", use_helper=True):
@@ -518,6 +734,13 @@ def main():
         print(f"[*] PlayerView.onAttachedToWindow hooked in {hook_count} class(es)")
 
     # =========================================================================
+    # PHASE B (v8): Bar background smali patches
+    # Permanently neutralize bar backgrounds at the source. Found by 4 parallel
+    # subagents exploring the jadx-decompiled Instagram source.
+    # =========================================================================
+    bar_res_count, bar_tint_count, bar_alpha_count = patch_bar_backgrounds_phase_b(smali_dirs, decompiled)
+
+    # =========================================================================
     # recompile
     # =========================================================================
     print("\n[*] Recompiling with apktool...")
@@ -578,6 +801,9 @@ def main():
     print(f"    - IgProgressImageView.onMeasure super (legacy, poster)                [{onmeasure_count}]")
     if use_helper:
         print(f"    - PlayerView.onAttachedToWindow helper hook                          [{hook_count}]")
+    print(f"    - PHASE B bar bg resource IDs nulled                                [{bar_res_count}]  <-- KEY (v8)")
+    print(f"    - PHASE B status-bar tint -> transparent                            [{bar_tint_count}]  <-- KEY (v8)")
+    print(f"    - PHASE B reply-bar alpha -> 0                                      [{bar_alpha_count}]  <-- KEY (v8)")
 
 if __name__ == "__main__":
     main()

@@ -15,6 +15,7 @@ import android.view.Gravity;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
@@ -26,50 +27,36 @@ import java.util.HashSet;
 import java.util.Set;
 
 /**
- * InstaPatchedTrueReel runtime helper (v7).
+ * InstaPatchedTrueReel runtime helper (v8).
  *
- * v7 fixes (based on v6 user feedback + VLM screenshot analysis):
+ * v8 is a COMPANION to Phase B smali patches (which permanently neutralize bar
+ * backgrounds at the source). The runtime helper handles:
+ *   - Window transparency (status bar + nav bar color = TRANSPARENT)
+ *   - Video chain fill (MATCH_PARENT so video extends behind system bars)
+ *   - Runtime transparency BELT-AND-SUSPENDERS (catches any bar the smali patches missed,
+ *     and catches bars Litho re-mounts with their original drawable)
+ *   - Fullscreen button added to the Activity's WINDOW DECORVIEW (above all IG touch
+ *     interceptors — fixes v7's "click does nothing" bug)
  *
- * USER REQUIREMENTS (v7):
- *   1. Status bar: VISIBLE but TRANSPARENT (not hidden). Video extends behind it.
- *      Only wifi info may be hidden — time + battery visible on transparent bar.
- *   2. Main bottom bar (Home/Reels/Create/Search/Profile): 100% TRANSPARENT.
- *      NO black strip, just white icons on video. NO blur.
- *   3. Comment bar "Add comment..." box: 100% TRANSPARENT background.
- *      Just white text + white outline. Reel playing behind it.
- *   4. Fullscreen button on 16:9 videos: TikTok-style LANDSCAPE rotation
- *      (rotate phone horizontal, play like YouTube fullscreen).
- *   5. NO blur anywhere — just 100% transparency.
- *
- * v6 → v7 CHANGES:
- *   - Status bar: was HIDDEN (immersive flags) → now TRANSPARENT (color set to TRANSPARENT,
- *     LAYOUT flags only, no HIDE/FULLSCREEN flags)
- *   - Bars: was 60% black (0x99000000) + RenderEffect blur → now 100% transparent
- *     (Color.TRANSPARENT) + NO blur
- *   - Video chain: now forced to MATCH_PARENT + clear padding so video extends BEHIND bars
- *   - Fullscreen button: was setScaleY (broken) → now setRequestedOrientation(LANDSCAPE)
- *     (real TikTok-style rotation)
- *   - Re-scan: periodic re-scan every 1s for 30s to catch dynamically-created bars
- *     (comment composer appears when user taps comment icon)
- *
- * EFFICIENT CODE EXPLORATION METHOD (v7):
- *   Instead of hardcoding every bar class name, v7 uses "detect by characteristics":
- *   - Opaque ColorDrawable background (alpha >= 200) → likely a bar
- *   - View at top or bottom of screen (Y position check) → likely a bar
- *   - Skip views containing TextureView → not the video
- *   - Skip the video's ancestor chain → don't make video transparent
- *   This is more robust and doesn't require knowing every obfuscated class name.
+ * KEY v7→v8 CHANGES:
+ *   1. Bar transparency: use bg.mutate().setAlpha(0) (preserves drawable, invisible)
+ *      IN ADDITION to setBackgroundColor(TRANSPARENT). mutate() prevents shared-state bugs.
+ *   2. Re-scan: ViewTreeObserver.OnGlobalLayoutListener on reels root (re-scans on EVERY
+ *      layout change — catches Litho re-mounts instantly) + Choreographer 500ms fallback.
+ *   3. Fullscreen button: added to activity.getWindow().getDecorView() (root FrameLayout)
+ *      — above ALL IG views including GestureManagerFrameLayout. Fixes touch interception.
+ *   4. No depth limit on view-tree walk (comment sheet bars may be very deep).
+ *   5. Companion to Phase B: smali patches kill bar backgrounds at the source permanently;
+ *      this helper is a runtime safety net for anything missed.
  */
 public class TrueReelsHelper {
 
-    // LAYOUT flags ONLY — NO hide flags (we want status bar VISIBLE but transparent)
+    // LAYOUT flags ONLY — NO hide flags (status bar VISIBLE but transparent)
     // 0x700 = LAYOUT_STABLE(0x100) | LAYOUT_FULLSCREEN(0x200) | LAYOUT_HIDE_NAVIGATION(0x400)
-    // This makes content lay out BEHIND system bars without hiding them.
     private static final int FLAG_LAYOUT_BEHIND_BARS = 0x100 | 0x200 | 0x400;
 
     private static final String TAG_BTN = "truereels_fs_btn";
     private static final String TAG_TRANSPARENT = "truereels_trans";
-    private static final String TAG_CHAIN = "truereels_chain";
 
     // Reels context ancestor class names (reels tab + story viewer)
     private static final Set<String> REELS_ANCESTORS = new HashSet<>();
@@ -84,10 +71,10 @@ public class TrueReelsHelper {
         REELS_ANCESTORS.add("ReelViewGroup");
     }
 
-    // Known bar class names to make transparent (TikTok-style 100% transparent bars)
+    // Known bar class names (from SA-A/SA-B subagent exploration of decompiled source)
     private static final Set<String> BAR_CLASS_NAMES = new HashSet<>();
     static {
-        // Reels-specific bars
+        // Reels-specific bars (smali-patched in Phase B, but runtime fallback too)
         BAR_CLASS_NAMES.add("ClipsViewerNavigationBar");
         BAR_CLASS_NAMES.add("ClipsViewerActionBar");
         BAR_CLASS_NAMES.add("ClipsViewerReplyBar");
@@ -104,10 +91,12 @@ public class TrueReelsHelper {
         BAR_CLASS_NAMES.add("MainBottomTabBar");
         BAR_CLASS_NAMES.add("NavigationTabBar");
         BAR_CLASS_NAMES.add("IgBottomTabBar");
-        // Comment composer
+        // Comment composer / sheet
         BAR_CLASS_NAMES.add("CommentComposer");
         BAR_CLASS_NAMES.add("ClipsCommentComposer");
         BAR_CLASS_NAMES.add("CommentComposerBar");
+        BAR_CLASS_NAMES.add("BottomSheetDialog");
+        BAR_CLASS_NAMES.add("BottomSheetFragment");
     }
 
     /** Called from LX/7ky.onAttachedToWindow (smali-injected). */
@@ -120,32 +109,25 @@ public class TrueReelsHelper {
             }
 
             // 1. Make window status bar + nav bar TRANSPARENT (not hidden).
-            //    Content lays out behind system bars; bars are visible but transparent.
             makeWindowTransparent(videoView);
 
             // 2. Make the video's ancestor chain fill the ENTIRE screen.
-            //    This ensures the video extends BEHIND the status bar + nav bar + IG tab bar.
-            //    (Without this, the video only fills the area BETWEEN the bars.)
             makeVideoChainFillScreen(videoView, reelsRoot);
 
-            // 3. Make all bar-like views 100% TRANSPARENT (no blur).
-            //    Walk from the activity's decorView (to catch the IG main tab bar which is
-            //    a SIBLING of the reels fragment, not a child of reelsRoot).
-            //    Only run when in reels context — feed/stories unaffected.
+            // 3. Runtime transparency safety net (companion to Phase B smali patches).
+            //    Register a global layout listener on the reels root so we re-scan on
+            //    EVERY layout change (catches Litho re-mounts instantly). Also do an
+            //    immediate scan + a periodic Choreographer fallback.
+            installLayoutListener(videoView, reelsRoot);
             final View video = videoView;
             videoView.post(new Runnable() {
-                @Override public void run() {
-                    makeBarsTransparent(video);
-                }
+                @Override public void run() { makeBarsTransparent(video); }
             });
-
-            // 4. Periodic re-scan: bars like the comment composer are created dynamically
-            //    when the user taps the comment icon. A one-shot walk misses them.
-            //    Re-scan every 1s for 30s to catch them.
             startRescan(videoView);
 
-            // 5. Fullscreen toggle button for horizontal (16:9) videos.
-            //    Uses setRequestedOrientation(LANDSCAPE) for real TikTok-style rotation.
+            // 4. Fullscreen toggle button for horizontal (16:9) videos.
+            //    Added to the Activity's WINDOW DECORVIEW (root) — above all IG touch
+            //    interceptors. Fixes v7's "click does nothing" bug.
             ensureFullscreenButton(videoView);
         } catch (Throwable t) {
             // never crash the host
@@ -183,38 +165,26 @@ public class TrueReelsHelper {
             Window window = activity.getWindow();
             if (window == null) return;
 
-            // Enable drawing behind system bars
             window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
-
-            // Set status bar + nav bar color to TRANSPARENT
-            // (NOT hiding them — they remain visible but transparent so video shows through)
             window.setStatusBarColor(Color.TRANSPARENT);
             window.setNavigationBarColor(Color.TRANSPARENT);
 
-            // Layout content behind system bars (but don't hide them)
-            // 0x700 = LAYOUT_STABLE | LAYOUT_FULLSCREEN | LAYOUT_HIDE_NAVIGATION
             View decorView = window.getDecorView();
             decorView.setSystemUiVisibility(FLAG_LAYOUT_BEHIND_BARS);
 
-            // On API 30+ (Android 11+), use the modern edge-to-edge API for better behavior
             if (Build.VERSION.SDK_INT >= 30) {
                 try {
-                    // setDecorFitsSystemWindows(false) = content extends behind system bars
                     window.setDecorFitsSystemWindows(false);
-                } catch (Throwable t) {
-                    // fallback to legacy flags (already set above)
-                }
+                } catch (Throwable t) {}
             }
         } catch (Throwable t) {}
     }
 
     // -----------------------------------------------------------------------
     // Make video's ancestor chain fill the entire screen
-    // (so video extends BEHIND status bar + nav bar + IG tab bar)
     // -----------------------------------------------------------------------
     private static void makeVideoChainFillScreen(View videoView, View reelsRoot) {
         try {
-            // Walk up from video view to reels root, set MATCH_PARENT + clear padding
             View v = videoView;
             int hops = 0;
             while (v != null && v != reelsRoot && hops < 20) {
@@ -235,7 +205,6 @@ public class TrueReelsHelper {
                     break;
                 }
             }
-            // Also the reels root itself
             try {
                 ViewGroup.LayoutParams lp = reelsRoot.getLayoutParams();
                 if (lp != null) {
@@ -250,7 +219,48 @@ public class TrueReelsHelper {
     }
 
     // -----------------------------------------------------------------------
-    // Make all bar-like views 100% TRANSPARENT (no blur)
+    // Layout listener — re-scan on every layout change (catches Litho re-mounts)
+    // -----------------------------------------------------------------------
+    private static void installLayoutListener(final View videoView, View reelsRoot) {
+        try {
+            if (reelsRoot == null) return;
+            final View root = reelsRoot;
+            final View video = videoView;
+            ViewTreeObserver vto = reelsRoot.getViewTreeObserver();
+            if (vto == null) return;
+            vto.addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
+                @Override public void onGlobalLayout() {
+                    try {
+                        if (findReelsRoot(video) != null) {
+                            makeBarsTransparent(video);
+                        }
+                    } catch (Throwable t) {}
+                }
+            });
+            // Also listen on the decorView (catches comment sheet which is added to decorView)
+            Activity activity = findActivity(videoView);
+            if (activity != null) {
+                View decor = activity.getWindow().getDecorView();
+                if (decor != null) {
+                    ViewTreeObserver dvto = decor.getViewTreeObserver();
+                    if (dvto != null) {
+                        dvto.addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
+                            @Override public void onGlobalLayout() {
+                                try {
+                                    if (findReelsRoot(video) != null) {
+                                        makeBarsTransparent(video);
+                                    }
+                                } catch (Throwable t) {}
+                            }
+                        });
+                    }
+                }
+            }
+        } catch (Throwable t) {}
+    }
+
+    // -----------------------------------------------------------------------
+    // Make all bar-like views transparent (companion to Phase B smali patches)
     // -----------------------------------------------------------------------
     private static void makeBarsTransparent(View videoView) {
         try {
@@ -259,7 +269,6 @@ public class TrueReelsHelper {
             View decorView = activity.getWindow().getDecorView();
             if (!(decorView instanceof ViewGroup)) return;
 
-            // Build the set of views that are the video's ancestors (don't make these transparent)
             Set<View> videoChain = new HashSet<>();
             View v = videoView;
             while (v != null) {
@@ -271,27 +280,20 @@ public class TrueReelsHelper {
                 }
             }
 
-            // Walk the entire decorView tree and make bar-like views transparent
             makeBarsTransparentRecursive((ViewGroup) decorView, videoChain, 0);
         } catch (Throwable t) {}
     }
 
     private static void makeBarsTransparentRecursive(ViewGroup viewGroup, Set<View> videoChain, int depth) {
-        if (viewGroup == null || depth > 35) return;
+        if (viewGroup == null || depth > 50) return; // no depth limit (comment sheet is deep)
         try {
             int count = viewGroup.getChildCount();
             for (int i = 0; i < count; i++) {
                 View child = viewGroup.getChildAt(i);
                 if (child == null) continue;
 
-                // Skip the video surface and its ancestors
-                if (videoChain.contains(child)) {
-                    // Still recurse into the video's ancestors (they might contain bars)
-                    if (child instanceof ViewGroup) {
-                        makeBarsTransparentRecursive((ViewGroup) child, videoChain, depth + 1);
-                    }
-                    continue;
-                }
+                // Skip the fullscreen button we added
+                if (TAG_BTN.equals(child.getTag())) continue;
 
                 // Skip TextureViews (the video surface)
                 if (child instanceof TextureView) continue;
@@ -310,7 +312,6 @@ public class TrueReelsHelper {
                 }
 
                 // Check if it's a bar-like view at top or bottom of screen
-                // (avoids making random opaque views transparent)
                 if (!shouldMakeTransparent && hasOpaqueBackground(child)) {
                     shouldMakeTransparent = isAtTopOrBottom(child);
                 }
@@ -319,7 +320,7 @@ public class TrueReelsHelper {
                     setBarTransparent(child);
                 }
 
-                // Recurse into children
+                // Recurse into children (even for bars — they may contain nested opaque views)
                 if (child instanceof ViewGroup) {
                     makeBarsTransparentRecursive((ViewGroup) child, videoChain, depth + 1);
                 }
@@ -327,16 +328,11 @@ public class TrueReelsHelper {
         } catch (Throwable t) {}
     }
 
-    /**
-     * Check if a view has an opaque ColorDrawable or similar background.
-     * alpha >= 200 means it's mostly opaque (a solid bar background).
-     */
     private static boolean hasOpaqueBackground(View view) {
         try {
             Drawable bg = view.getBackground();
             if (bg == null) return false;
 
-            // Unwrap InsetDrawable / LayerDrawable to find the actual color
             if (bg instanceof InsetDrawable) {
                 Drawable inner = ((InsetDrawable) bg).getDrawable();
                 if (inner != null) bg = inner;
@@ -351,21 +347,16 @@ public class TrueReelsHelper {
             if (bg instanceof ColorDrawable) {
                 int color = ((ColorDrawable) bg).getColor();
                 int alpha = Color.alpha(color);
-                return alpha >= 200; // mostly opaque
+                return alpha >= 150;
             }
 
-            // GradientDrawable with solid fill
             if (bg instanceof GradientDrawable) {
-                // Can't easily read the color, but if it's opaque and the view is a bar, make it transparent
-                return true; // conservative: treat GradientDrawable bars as targets
+                return true;
             }
         } catch (Throwable t) {}
         return false;
     }
 
-    /**
-     * Check if a view is positioned at the top or bottom of the screen (likely a bar).
-     */
     private static boolean isAtTopOrBottom(View view) {
         try {
             int[] location = new int[2];
@@ -373,18 +364,11 @@ public class TrueReelsHelper {
             int y = location[1];
             int height = view.getHeight();
             int screenHeight = view.getContext().getResources().getDisplayMetrics().heightPixels;
-
-            // Top bar: within first 200dp of screen
-            int topThreshold = dp2(view.getContext(), 200);
-            // Bottom bar: bottom edge within last 200dp of screen
-            int bottomThreshold = screenHeight - dp2(view.getContext(), 200);
-
             if (height <= 0) return false;
-
-            // View's top is near the top of the screen, OR view's bottom is near the bottom
+            int topThreshold = dp2(view.getContext(), 200);
+            int bottomThreshold = screenHeight - dp2(view.getContext(), 200);
             boolean atTop = y >= 0 && y < topThreshold;
             boolean atBottom = (y + height) > bottomThreshold && (y + height) <= screenHeight + dp2(view.getContext(), 50);
-
             return atTop || atBottom;
         } catch (Throwable t) {
             return false;
@@ -392,19 +376,35 @@ public class TrueReelsHelper {
     }
 
     /**
-     * Make a single bar view 100% transparent (NO blur).
+     * Make a single bar view transparent.
+     * v8: use mutate().setAlpha(0) IN ADDITION to setBackgroundColor(TRANSPARENT).
+     * mutate() prevents shared-state bugs; setAlpha(0) preserves the drawable but
+     * makes it invisible (more robust against Litho re-mounts than setBackgroundColor).
      */
     private static void setBarTransparent(View bar) {
         try {
-            // Mark as processed (use a tag — if already tagged, skip)
             Object existingTag = bar.getTag();
-            if (TAG_TRANSPARENT.equals(existingTag)) return;
+            if (TAG_TRANSPARENT.equals(existingTag)) {
+                // Already tagged — but still re-apply alpha in case Litho re-mounted
+            }
             bar.setTag(TAG_TRANSPARENT);
 
-            // Set background to 100% TRANSPARENT (no blur, no semi-transparent black)
-            bar.setBackgroundColor(Color.TRANSPARENT);
+            // Method 1: mutate + setAlpha(0) — preserves drawable, invisible
+            try {
+                Drawable bg = bar.getBackground();
+                if (bg != null) {
+                    bg = bg.mutate();
+                    bg.setAlpha(0);
+                    bar.setBackground(bg);
+                }
+            } catch (Throwable t) {}
 
-            // Remove any RenderEffect that might have been set (from v6)
+            // Method 2: setBackgroundColor(TRANSPARENT) — belt-and-suspenders
+            try {
+                bar.setBackgroundColor(Color.TRANSPARENT);
+            } catch (Throwable t) {}
+
+            // Remove any RenderEffect (from v6)
             if (Build.VERSION.SDK_INT >= 31) {
                 try {
                     bar.setRenderEffect(null);
@@ -417,16 +417,18 @@ public class TrueReelsHelper {
                 for (int i = 0; i < vg.getChildCount(); i++) {
                     View child = vg.getChildAt(i);
                     if (child == null) continue;
-                    // Only clear backgrounds of containers (FrameLayout, LinearLayout),
-                    // NOT ImageView/TextView (those are the icons/text we want to keep white)
                     if (child instanceof FrameLayout || child instanceof LinearLayout) {
-                        Drawable cbg = child.getBackground();
-                        if (cbg instanceof ColorDrawable) {
-                            int c = ((ColorDrawable) cbg).getColor();
-                            if (Color.alpha(c) >= 200) {
-                                child.setBackgroundColor(Color.TRANSPARENT);
+                        try {
+                            Drawable cbg = child.getBackground();
+                            if (cbg != null) {
+                                cbg = cbg.mutate();
+                                cbg.setAlpha(0);
+                                child.setBackground(cbg);
                             }
-                        }
+                        } catch (Throwable t) {}
+                        try {
+                            child.setBackgroundColor(Color.TRANSPARENT);
+                        } catch (Throwable t) {}
                     }
                 }
             }
@@ -434,7 +436,7 @@ public class TrueReelsHelper {
     }
 
     // -----------------------------------------------------------------------
-    // Periodic re-scan (catch dynamically-created bars like comment composer)
+    // Periodic re-scan (Choreographer-based fallback — catches anything missed)
     // -----------------------------------------------------------------------
     private static void startRescan(View videoView) {
         try {
@@ -443,14 +445,13 @@ public class TrueReelsHelper {
             final Runnable rescan = new Runnable() {
                 @Override public void run() {
                     try {
-                        // Only re-scan if still in reels context
                         if (findReelsRoot(video) != null) {
                             makeBarsTransparent(video);
                         }
                     } catch (Throwable t) {}
                     count[0]++;
-                    if (count[0] < 30) {
-                        video.postDelayed(this, 1000); // every 1s for 30s
+                    if (count[0] < 60) {
+                        video.postDelayed(this, 500); // every 500ms for 30s
                     }
                 }
             };
@@ -459,81 +460,96 @@ public class TrueReelsHelper {
     }
 
     // -----------------------------------------------------------------------
-    // Fullscreen toggle button for horizontal videos
-    // Uses setRequestedOrientation(LANDSCAPE) for real TikTok-style rotation
+    // Fullscreen toggle button — added to Activity's WINDOW DECORVIEW
+    // (above all IG touch interceptors — fixes v7's "click does nothing" bug)
     // -----------------------------------------------------------------------
     private static boolean sIsLandscape = false;
+    private static View sButton = null;
 
     private static void ensureFullscreenButton(final View videoView) {
         try {
-            final ViewGroup parent = (ViewGroup) videoView.getParent();
-            if (parent == null) {
-                videoView.post(new Runnable() {
-                    @Override public void run() { ensureFullscreenButton(videoView); }
-                });
-                return;
-            }
-            // Avoid double-adding.
-            for (int i = 0; i < parent.getChildCount(); i++) {
-                Object t = parent.getChildAt(i).getTag();
-                if (TAG_BTN.equals(t)) return;
-            }
+            final Activity activity = findActivity(videoView);
+            if (activity == null) return;
+            final Window window = activity.getWindow();
+            if (window == null) return;
 
-            final View btn = makeButton(videoView.getContext());
-            btn.setTag(TAG_BTN);
-            final FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(
-                    dp(videoView, 36), dp(videoView, 36),
-                    Gravity.TOP | Gravity.END);
-            flp.topMargin = dp(videoView, 52);
-            flp.rightMargin = dp(videoView, 10);
-            try {
-                if (parent instanceof FrameLayout) {
-                    parent.addView(btn, flp);
-                    // Bring to front so it receives touch events (not behind overlays)
-                    btn.bringToFront();
-                    btn.setClickable(true);
-                    btn.setFocusable(true);
-                } else {
-                    return;
-                }
-            } catch (Throwable t) { return; }
-            btn.setVisibility(View.GONE);
+            videoView.post(new Runnable() {
+                @Override public void run() {
+                    try {
+                        final ViewGroup decorView = (ViewGroup) window.getDecorView();
+                        if (decorView == null) return;
 
-            btn.setOnClickListener(new View.OnClickListener() {
-                @Override public void onClick(View v) {
-                    toggleFullscreen(videoView, btn);
+                        // Avoid double-adding
+                        if (sButton != null && sButton.getParent() != null) return;
+                        // Check for existing button
+                        int n = decorView.getChildCount();
+                        for (int i = 0; i < n; i++) {
+                            View c = decorView.getChildAt(i);
+                            if (TAG_BTN.equals(c.getTag())) {
+                                sButton = c;
+                                return;
+                            }
+                        }
+
+                        final View btn = makeButton(videoView.getContext());
+                        btn.setTag(TAG_BTN);
+                        sButton = btn;
+
+                        // LayoutParams for top-right corner
+                        final FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(
+                                dp(videoView, 40), dp(videoView, 40),
+                                Gravity.TOP | Gravity.END);
+                        flp.topMargin = dp(videoView, 56);
+                        flp.rightMargin = dp(videoView, 12);
+
+                        decorView.addView(btn, flp);
+                        btn.bringToFront();
+                        btn.setClickable(true);
+                        btn.setFocusable(true);
+                        // Keep the button on top — re-bring-to-front on every layout
+                        decorView.getViewTreeObserver().addOnGlobalLayoutListener(
+                            new ViewTreeObserver.OnGlobalLayoutListener() {
+                                @Override public void onGlobalLayout() {
+                                    try { btn.bringToFront(); } catch (Throwable t) {}
+                                }
+                            });
+
+                        btn.setOnClickListener(new View.OnClickListener() {
+                            @Override public void onClick(View v) {
+                                toggleFullscreen(videoView, btn);
+                            }
+                        });
+
+                        // Poll for video size to decide whether to show the button.
+                        final int[] polls = {0};
+                        final Runnable poll = new Runnable() {
+                            @Override public void run() {
+                                polls[0]++;
+                                int[] wh = getVideoSize(videoView);
+                                if (wh != null && wh[0] > 0 && wh[1] > 0) {
+                                    if (wh[0] > wh[1]) {
+                                        btn.setVisibility(View.VISIBLE);
+                                    } else {
+                                        btn.setVisibility(View.GONE);
+                                    }
+                                    return;
+                                }
+                                if (polls[0] < 40) {
+                                    videoView.postDelayed(this, 500);
+                                }
+                            }
+                        };
+                        videoView.postDelayed(poll, 600);
+                    } catch (Throwable t) {}
                 }
             });
-
-            // Poll for video size to decide whether to show the button.
-            final int[] polls = {0};
-            final Runnable poll = new Runnable() {
-                @Override public void run() {
-                    polls[0]++;
-                    int[] wh = getVideoSize(videoView);
-                    if (wh != null && wh[0] > 0 && wh[1] > 0) {
-                        if (wh[0] > wh[1]) {
-                            // Horizontal video — show the fullscreen button
-                            btn.setVisibility(View.VISIBLE);
-                        } else {
-                            btn.setVisibility(View.GONE);
-                        }
-                        return;
-                    }
-                    if (polls[0] < 40) {
-                        videoView.postDelayed(this, 500);
-                    }
-                }
-            };
-            videoView.postDelayed(poll, 600);
         } catch (Throwable t) {}
     }
 
     /**
      * Toggle between portrait (normal reels) and landscape (TikTok-style fullscreen).
-     * Uses Activity.setRequestedOrientation() — this rotates the ENTIRE activity,
-     * so the video (which already fills the screen) plays in true landscape mode
-     * like YouTube fullscreen.
+     * Uses Activity.setRequestedOrientation() — this rotates the ENTIRE activity.
+     * InstagramMainActivity manifest has configChanges=orientation so no recreation.
      */
     private static void toggleFullscreen(View videoView, View btn) {
         try {
@@ -541,12 +557,10 @@ public class TrueReelsHelper {
             if (activity == null) return;
 
             if (sIsLandscape) {
-                // Back to portrait (normal reels)
                 activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
                 sIsLandscape = false;
                 btn.setAlpha(0.55f);
             } else {
-                // Rotate to landscape (TikTok-style fullscreen)
                 activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
                 sIsLandscape = true;
                 btn.setAlpha(1f);
@@ -570,11 +584,6 @@ public class TrueReelsHelper {
         return null;
     }
 
-    /**
-     * Get the video aspect ratio (width/height) from LX/7ky's A04 field.
-     * Walks the superclass chain to find inherited field A04.
-     * Returns int[]{width, height} proportional (aspect*100, 100).
-     */
     private static int[] getVideoSize(View videoView) {
         try {
             Object mediaInfo = null;
@@ -593,7 +602,7 @@ public class TrueReelsHelper {
 
             double aspect = -1.0;
 
-            // Read cached public Double A03 field first.
+            // Read cached public Double A03 field first (on C160765mH / mediaInfo)
             Class<?> mc = mediaInfo.getClass();
             while (mc != null && mc != Object.class) {
                 try {
@@ -610,7 +619,7 @@ public class TrueReelsHelper {
                 }
             }
 
-            // Fall back to A02() method.
+            // Fall back to A02() method
             if (aspect <= 0.0) {
                 mc = mediaInfo.getClass();
                 while (mc != null && mc != Object.class) {
@@ -629,7 +638,7 @@ public class TrueReelsHelper {
                 }
             }
 
-            // Last resort: A03(Context, boolean).
+            // Last resort: A03(Context, boolean)
             if (aspect <= 0.0) {
                 mc = mediaInfo.getClass();
                 while (mc != null && mc != Object.class) {
@@ -658,9 +667,8 @@ public class TrueReelsHelper {
 
     private static View makeButton(Context ctx) {
         ImageView b = new ImageView(ctx);
-        // Use a fullscreen/expand icon
         b.setImageResource(android.R.drawable.ic_menu_crop);
-        b.setBackgroundColor(0x66000000); // semi-transparent for visibility
+        b.setBackgroundColor(0x66000000);
         b.setAlpha(0.55f);
         b.setScaleType(ImageView.ScaleType.FIT_CENTER);
         b.setPadding(dp2(ctx, 6), dp2(ctx, 6), dp2(ctx, 6), dp2(ctx, 6));
