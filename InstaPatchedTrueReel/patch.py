@@ -217,17 +217,28 @@ def patch_bar_resource_ids(content):
     lines = content.split("\n")
     for i, line in enumerate(lines):
         stripped = line.strip()
-        # Match: const v0, 0x7f08XXXX  OR  const/16 v0, 0x7f08XXXX
-        m = re.match(r"^(\s*)(const(?:/16)?\s+v\d+,\s+)(0x7f080[0-9a-f]{3})\s*$", stripped)
+        # Match: const vN, 0x7f08XXXX  OR  const/16 vN, 0x7f08XXXX
+        # CRITICAL: capture the register (vN) so we preserve it in the replacement.
+        # Smali requires the exact register — writing v0 when the original used v3 is a syntax error.
+        m = re.match(r"^(\s*)(const(?:/16|/4)?\s+)(v\d+)(,\s+)(0x7f080[0-9a-f]{3})\s*$", stripped)
         if m:
             indent_prefix = line[:len(line) - len(line.lstrip())]
-            instr = m.group(2)
-            res_id = m.group(3)
+            instr_keyword = m.group(2).strip()  # 'const' or 'const/16' or 'const/4'
+            reg = m.group(3)                   # the register, e.g. 'v3'
+            comma = m.group(4)
+            res_id = m.group(5)
             if res_id in BAR_RESOURCE_REPLACEMENTS:
                 replacement = BAR_RESOURCE_REPLACEMENTS[res_id]
-                # Use const/4 for small values (0x0 fits in 4 bits)
-                new_instr = "const/4 " if instr.startswith("const/16") and int(replacement, 16) <= 7 else instr
-                lines[i] = f"{indent_prefix}{new_instr}v0, {replacement}  # PATCHED: was {res_id}"
+                # Use const/4 for small values (0x0 fits in 4 bits), but only if
+                # the register is v0-v15 (const/4 only works for those). const/16 works for any register.
+                # Safest: keep the original instruction keyword. const/16 vN, 0x0 is valid smali.
+                # Actually const/4 vN, 0x0 is valid for v0-v15. For v16+ we must use const/16.
+                reg_num = int(reg[1:])
+                if int(replacement, 16) <= 7 and reg_num <= 15:
+                    new_instr = "const/4"
+                else:
+                    new_instr = instr_keyword if instr_keyword in ("const", "const/16", "const/4") else "const/16"
+                lines[i] = f"{indent_prefix}{new_instr} {reg}{comma}{replacement}  # PATCHED: was {res_id}"
                 changed_count += 1
     return "\n".join(lines), changed_count
 
@@ -245,9 +256,19 @@ def patch_status_bar_tint_color(content):
         if "const" in stripped and "0x7f060058" in stripped:
             indent_prefix = line[:len(line) - len(line.lstrip())]
             # Replace the color resource ID with bds_transparent
-            m = re.match(r"^(\s*)(const(?:/16)?\s+v\d+,\s+)0x7f060058\s*$", stripped)
+            # CRITICAL: preserve the original register (vN)
+            m = re.match(r"^(\s*)(const(?:/16|/4)?\s+)(v\d+)(,\s+)0x7f060058\s*$", stripped)
             if m:
-                lines[i] = f"{indent_prefix}const v0, 0x7f0600a9  # PATCHED: was 0x7f060058 (bds_black_50_transparent) -> bds_transparent"
+                instr_keyword = m.group(2).strip()
+                reg = m.group(3)
+                comma = m.group(4)
+                # 0x7f0600a9 is a 16-bit value — need const or const/16. Keep original keyword.
+                # If original was const/4, upgrade to const (since 0x7f0600a9 > 7).
+                if instr_keyword == "const/4":
+                    new_instr = "const"
+                else:
+                    new_instr = instr_keyword
+                lines[i] = f"{indent_prefix}{new_instr} {reg}{comma}0x7f0600a9  # PATCHED: was 0x7f060058 (bds_black_50_transparent) -> bds_transparent"
                 changed += 1
     return "\n".join(lines), changed
 
@@ -262,10 +283,19 @@ def patch_reply_bar_alpha(content):
     for i, line in enumerate(lines):
         stripped = line.strip()
         # Match: const/16 vX, 0xcc  (alpha = 204)
-        m = re.match(r"^(\s*)(const/16\s+v\d+,\s+)0xcc\s*$", stripped)
+        # CRITICAL: preserve the original register (vN)
+        m = re.match(r"^(\s*)(const/16\s+)(v\d+)(,\s+)0xcc\s*$", stripped)
         if m:
             indent_prefix = line[:len(line) - len(line.lstrip())]
-            lines[i] = f"{indent_prefix}const/4 v0, 0x0  # PATCHED: was 0xcc (alpha=204) -> 0 (transparent)"
+            reg = m.group(3)
+            comma = m.group(4)
+            reg_num = int(reg[1:])
+            # 0x0 fits in 4 bits — use const/4 if register is v0-v15, else const/16
+            if reg_num <= 15:
+                new_instr = "const/4"
+            else:
+                new_instr = "const/16"
+            lines[i] = f"{indent_prefix}{new_instr} {reg}{comma}0x0  # PATCHED: was 0xcc (alpha=204) -> 0 (transparent)"
             changed += 1
     return "\n".join(lines), changed
 

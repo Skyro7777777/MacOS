@@ -473,77 +473,76 @@ public class TrueReelsHelper {
             final Window window = activity.getWindow();
             if (window == null) return;
 
+            // Post to main thread, then do everything in a single-level anonymous class.
+            // (d8 fails on deeply nested anonymous classes like Runnable->OnGlobalLayoutListener,
+            //  so we flatten the nesting here.)
             videoView.post(new Runnable() {
                 @Override public void run() {
                     try {
-                        final ViewGroup decorView = (ViewGroup) window.getDecorView();
-                        if (decorView == null) return;
-
-                        // Avoid double-adding
-                        if (sButton != null && sButton.getParent() != null) return;
-                        // Check for existing button
-                        int n = decorView.getChildCount();
-                        for (int i = 0; i < n; i++) {
-                            View c = decorView.getChildAt(i);
-                            if (TAG_BTN.equals(c.getTag())) {
-                                sButton = c;
-                                return;
-                            }
-                        }
-
-                        final View btn = makeButton(videoView.getContext());
-                        btn.setTag(TAG_BTN);
-                        sButton = btn;
-
-                        // LayoutParams for top-right corner
-                        final FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(
-                                dp(videoView, 40), dp(videoView, 40),
-                                Gravity.TOP | Gravity.END);
-                        flp.topMargin = dp(videoView, 56);
-                        flp.rightMargin = dp(videoView, 12);
-
-                        decorView.addView(btn, flp);
-                        btn.bringToFront();
-                        btn.setClickable(true);
-                        btn.setFocusable(true);
-                        // Keep the button on top — re-bring-to-front on every layout
-                        decorView.getViewTreeObserver().addOnGlobalLayoutListener(
-                            new ViewTreeObserver.OnGlobalLayoutListener() {
-                                @Override public void onGlobalLayout() {
-                                    try { btn.bringToFront(); } catch (Throwable t) {}
-                                }
-                            });
-
-                        btn.setOnClickListener(new View.OnClickListener() {
-                            @Override public void onClick(View v) {
-                                toggleFullscreen(videoView, btn);
-                            }
-                        });
-
-                        // Poll for video size to decide whether to show the button.
-                        final int[] polls = {0};
-                        final Runnable poll = new Runnable() {
-                            @Override public void run() {
-                                polls[0]++;
-                                int[] wh = getVideoSize(videoView);
-                                if (wh != null && wh[0] > 0 && wh[1] > 0) {
-                                    if (wh[0] > wh[1]) {
-                                        btn.setVisibility(View.VISIBLE);
-                                    } else {
-                                        btn.setVisibility(View.GONE);
-                                    }
-                                    return;
-                                }
-                                if (polls[0] < 40) {
-                                    videoView.postDelayed(this, 500);
-                                }
-                            }
-                        };
-                        videoView.postDelayed(poll, 600);
+                        ensureFullscreenButtonImpl(videoView, activity, window);
                     } catch (Throwable t) {}
                 }
             });
         } catch (Throwable t) {}
+    }
+
+    private static void ensureFullscreenButtonImpl(final View videoView, final Activity activity, final Window window) {
+        final ViewGroup decorView = (ViewGroup) window.getDecorView();
+        if (decorView == null) return;
+
+        // Avoid double-adding
+        if (sButton != null && sButton.getParent() != null) return;
+        int n = decorView.getChildCount();
+        for (int i = 0; i < n; i++) {
+            View c = decorView.getChildAt(i);
+            if (TAG_BTN.equals(c.getTag())) {
+                sButton = c;
+                return;
+            }
+        }
+
+        final View btn = makeButton(videoView.getContext());
+        btn.setTag(TAG_BTN);
+        sButton = btn;
+
+        final FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(
+                dp(videoView, 40), dp(videoView, 40),
+                Gravity.TOP | Gravity.END);
+        flp.topMargin = dp(videoView, 56);
+        flp.rightMargin = dp(videoView, 12);
+
+        decorView.addView(btn, flp);
+        btn.bringToFront();
+        btn.setClickable(true);
+        btn.setFocusable(true);
+
+        // OnClickListener — single-level anonymous class (OK for d8)
+        btn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                toggleFullscreen(videoView, btn);
+            }
+        });
+
+        // Poll for video size — single-level anonymous Runnable
+        final int[] polls = {0};
+        final Runnable poll = new Runnable() {
+            @Override public void run() {
+                polls[0]++;
+                int[] wh = getVideoSize(videoView);
+                if (wh != null && wh[0] > 0 && wh[1] > 0) {
+                    if (wh[0] > wh[1]) {
+                        btn.setVisibility(View.VISIBLE);
+                    } else {
+                        btn.setVisibility(View.GONE);
+                    }
+                    return;
+                }
+                if (polls[0] < 40) {
+                    videoView.postDelayed(this, 500);
+                }
+            }
+        };
+        videoView.postDelayed(poll, 600);
     }
 
     /**
