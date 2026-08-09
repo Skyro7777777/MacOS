@@ -17,3 +17,6 @@ state/
 # editor
 .vscode/
 .idea/
+insta.apk
+tools/
+*.apk

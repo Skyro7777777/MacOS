@@ -64,26 +64,39 @@ def main():
         '    # InstaTrueReel: zero top inset\n    const/4 p1, 0x0\n\n    invoke-static {v2, p1, p2}, LX/6wm;->A0w(Landroid/view/View;II)V',
         'A3-top-inset')
 
-    # A6: THE REAL FIX — call 2Ib.A01 (IG's own edge-to-edge helper) at the start of
-    # 2ZS.A01. This does EVERYTHING: setDecorFitsSystemWindows(false) + setStatusBarColor(0)
-    # + setNavigationBarColor(0) + white icons + clear FLAG_TRANSLUCENT_* + add FLAG_DRAWS.
-    # Previous A1fix/A4/A5 patches were insufficient because:
-    # - A1fix zeroed v3 but the deferred Choreographer path (3mE.A00 via ktp) re-applied
-    # - A4 set LAYOUT_FULLSCREEN but windowBackground (theme=black) still showed
-    # - A5 zeroed p1 in 1fC.A04 but other direct setStatusBarColor calls bypassed it
-    # 2Ib.A01 is the splash helper that does proper edge-to-edge. Calling it from 2ZS.A01
-    # (which runs on Reels onResume) makes the window truly edge-to-edge.
+    # A6: edge-to-edge using LEGACY API (works on Android 10/API 29+).
+    # v5 used 2Ib.A01 which calls setDecorFitsSystemWindows (API 30+) → crash on Android 10.
+    # This replacement uses only API 16+/21+ calls:
+    # - clearFlags(FLAG_TRANSLUCENT_STATUS|FLAG_TRANSLUCENT_NAVIGATION)
+    # - addFlags(FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+    # - setStatusBarColor(0) + setNavigationBarColor(0)
+    # - decorView.setSystemUiVisibility(LAYOUT_FULLSCREEN|LAYOUT_STABLE)
+    # - decorView.setBackgroundColor(0) ← KEY: makes decorView transparent so video shows
+    #   through the transparent status bar (theme sets windowBackground=black, so without
+    #   this the black shows through even with statusBarColor=0)
     patch_text(zs,
         '.method public static final A01(Landroid/app/Activity;Landroidx/fragment/app/Fragment;Lcom/instagram/common/session/UserSession;IZZZ)V\n    .locals 7',
         '.method public static final A01(Landroid/app/Activity;Landroidx/fragment/app/Fragment;Lcom/instagram/common/session/UserSession;IZZZ)V\n    .locals 7\n\n'
-        '    # InstaTrueReel: enable full edge-to-edge (transparent status + nav bar)\n'
+        '    # InstaTrueReel: edge-to-edge (legacy API, Android 10+)\n'
         '    invoke-virtual {p0}, Landroid/app/Activity;->getWindow()Landroid/view/Window;\n'
         '    move-result-object v0\n'
-        '    if-eqz v0, :cond_itre_skip\n'
+        '    if-eqz v0, :itre_skip\n'
+        '    const/high16 v1, 0xc000000\n'
+        '    invoke-virtual {v0, v1}, Landroid/view/Window;->clearFlags(I)V\n'
+        '    const/high16 v1, -0x80000000\n'
+        '    invoke-virtual {v0, v1}, Landroid/view/Window;->addFlags(I)V\n'
         '    const/4 v1, 0x0\n'
-        '    invoke-static {v0, v1}, LX/2Ib;->A01(Landroid/view/Window;Z)V\n'
-        '    :cond_itre_skip',
-        'A6-edge-to-edge')
+        '    invoke-virtual {v0, v1}, Landroid/view/Window;->setStatusBarColor(I)V\n'
+        '    invoke-virtual {v0, v1}, Landroid/view/Window;->setNavigationBarColor(I)V\n'
+        '    invoke-virtual {v0}, Landroid/view/Window;->getDecorView()Landroid/view/View;\n'
+        '    move-result-object v0\n'
+        '    if-eqz v0, :itre_skip\n'
+        '    const/16 v1, 0x500\n'
+        '    invoke-virtual {v0, v1}, Landroid/view/View;->setSystemUiVisibility(I)V\n'
+        '    const/4 v1, 0x0\n'
+        '    invoke-virtual {v0, v1}, Landroid/view/View;->setBackgroundColor(I)V\n'
+        '    :itre_skip',
+        'A6-edge-to-edge-legacy')
 
     # A5: zero p1 in 1fC.A04 so EVERY setStatusBarColor call uses transparent.
     # A6 sets transparent at the START of 2ZS.A01, but 2ZS.A01:294 calls
