@@ -161,7 +161,8 @@ def main():
         '.method public final FSS(II)V\n    .locals 21\n\n    move-object/from16 v2, p0',
         '.method public final FSS(II)V\n    .locals 21\n\n'
         '    # InstaTrueReel: rotate to landscape\n'
-        '    iget-object v0, p0, LX/VBP;->A02:LX/RE7;\n'
+        '    move-object/from16 v0, p0\n'
+        '    iget-object v0, v0, LX/VBP;->A02:LX/RE7;\n'
         '    iget-object v0, v0, LX/RE7;->A0B:LX/9eY;\n'
         '    iget-object v0, v0, LX/9eY;->A04:Landroidx/fragment/app/FragmentActivity;\n'
         '    const/4 v1, 0x0\n'
@@ -174,7 +175,8 @@ def main():
         '.method public final EvT(LX/950;)V\n    .locals 5\n\n    const/4 v2, 0x0',
         '.method public final EvT(LX/950;)V\n    .locals 5\n\n'
         '    # InstaTrueReel: restore orientation\n'
-        '    iget-object v0, p0, LX/VBP;->A02:LX/RE7;\n'
+        '    move-object/from16 v0, p0\n'
+        '    iget-object v0, v0, LX/VBP;->A02:LX/RE7;\n'
         '    iget-object v0, v0, LX/RE7;->A0B:LX/9eY;\n'
         '    iget-object v0, v0, LX/9eY;->A04:Landroidx/fragment/app/FragmentActivity;\n'
         '    const/16 v1, 0xe\n'
