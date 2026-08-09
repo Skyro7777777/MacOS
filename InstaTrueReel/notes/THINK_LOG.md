@@ -310,3 +310,40 @@ All 5 original gaps + several bonus items are now closed.
 ### Next step
 User triggers the workflow → downloads patched APK → tests on Android 10+.
 Iterate based on what works/breaks.
+
+---
+
+## 2026-08-09 — Step 5: BUILD SUCCESS! 🎉
+
+### What happened
+After 4 iterations fixing build errors, the patched APK built successfully:
+- Run 31306391649 | conclusion: SUCCESS
+- Artifact: InstaTrueReel-patched-apk (220.4 MB)
+- All 10 steps passed (decode → patch → build → sign → upload)
+
+### Build errors fixed (4 iterations)
+1. **VBP register error** — `iget-object v0, p0` failed because p0=v21 exceeds
+   v0-v15. Fixed with `move-object/from16 v0, p0` before the iget chain.
+2. **Bloks layouts.xml** — aapt can't compile `L|HEX|LEN|HASH` values. Replaced
+   with `@layout/abc_action_bar_title_item` across ALL values*/layouts.xml.
+3. **More Bloks layouts.xml** — same issue in values-h640dp/, values-land/,
+   values-sw600dp/. Used glob to fix all.
+4. **Unknown manifest attribute** — `android:allowCrossUidActivitySwitchFromBelow`
+   (Android 14+) not known to apktool 2.9.3's aapt2. Upgraded to apktool 3.0.3
+   AND added fallback to remove the attribute.
+
+### Patches in the build (9 total)
+A1+A2+A3: transparent status bar (decorView, content, top inset)
+B0: Bloks layouts.xml fix (build enabler)
+B1: zero bottomMargin (video reaches bottom)
+B2: transparent nav background (styles.xml)
+C1: zero dimming alpha (EPN, 8 calls)
+C2: translucent sheet panel (BottomSheetFragment, 2 calls)
+D1: rotate to landscape on fullscreen enter (VBP.FSS)
+D2: restore orientation on fullscreen exit (VBP.EvT)
+
+### Next: user installs + tests on Android 10+
+- Download artifact from GitHub Actions
+- Uninstall current Instagram (signature changed)
+- Install patched APK
+- Open Reels → test each feature
