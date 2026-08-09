@@ -94,6 +94,22 @@ def main():
         '    invoke-static {p0, v3}, LX/2ZS;->A00(Landroid/app/Activity;I)V',
         'A4-layout-fullscreen')
 
+    # A5: THE KEY FIX — patch 1fC.A04 to always use transparent color (p1=0)
+    # 1fC.A04 is the SINGLE method that calls window.setStatusBarColor(color).
+    # It's called from InstagramMainActivity.onResume (with BLACK) and from C2ZS.A01
+    # (with our zeroed v3). But the deferred Choreographer path + call ordering made
+    # it unreliable. By zeroing p1 at the START of A04, EVERY caller sets transparent.
+    # This is global but safe: non-Reels screens have top padding (insets) so the
+    # transparent status bar just shows the app's black background (looks same as before).
+    fc = find_smali(decoded, '1fC.smali')
+    patch_text(fc,
+        '.method public static final A04(Landroid/app/Activity;I)V\n    .locals 4\n\n    :goto_0',
+        '.method public static final A04(Landroid/app/Activity;I)V\n    .locals 4\n\n'
+        '    # InstaTrueReel: force transparent status bar color\n'
+        '    const/4 p1, 0x0\n\n'
+        '    :goto_0',
+        'A5-force-transparent-statusbar')
+
     # ── Feature B: floating bottom nav ─────────────────────────
     print("\n── Feature B: floating bottom nav ──")
 
@@ -154,16 +170,10 @@ def main():
     else:
         print("  ❌ B2-smali: 0bQ.smali not found")
 
-    # B3: raise caption above bottom nav (was overlapping after B1 zeroed bottomMargin)
-    # Change PADDING_BOTTOM from 0.0 to 168.0 (≈56dp at 3x density) in the reel overlay Litho section
-    g3 = find_smali(decoded, '33g.smali')
-    patch_text(g3,
-        '    sget-object v28, LX/0XB;->A02:LX/4qC;\n\n    const-wide/16 v3, 0x0\n\n    invoke-static {v3, v4}, Ljava/lang/Double;->doubleToRawLongBits(D)J',
-        '    sget-object v28, LX/0XB;->A02:LX/4qC;\n\n'
-        '    # InstaTrueReel: caption padding bottom (168.0 = ~56dp)\n'
-        '    const-wide v3, 0x4065000000000000L\n\n'
-        '    invoke-static {v3, v4}, Ljava/lang/Double;->doubleToRawLongBits(D)J',
-        'B3-caption-padding')
+    # B3: REVERTED — caption padding was overcorrecting (pushed UFI buttons too high).
+    # User confirmed v2 position (padding=0) was perfect for UFI; only caption slightly
+    # overlapped nav. Reverting to original 0.0 until a separate caption-only fix is designed.
+    # (No patch applied — leaving the original const-wide/16 v3, 0x0 in place.)
 
     # B4: transparent comment input bar (bottom_sheet_container, C6BM.pswitch_6)
     # The "Add Comments..." bar that replaces the main nav when viewing a reel from feed
@@ -275,6 +285,7 @@ def main():
     # D3: force-show the scrubber (seekbar) overlay on reels
     # IG already ships VideoScrubberSeekBar but gates it behind a boolean (A0x)
     # Change iget-boolean → const/4 v1, 0x1 to always include the scrubber
+    g3 = find_smali(decoded, '33g.smali')
     if g3:
         patch_text(g3,
             '    invoke-virtual {v6, v1}, LX/0XG;->A00(LX/2Yc;)V\n\n    iget-boolean v1, v0, LX/33g;->A0x:Z\n\n    const/4 v4, 0x0',
