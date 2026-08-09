@@ -33,7 +33,7 @@ jobs:
         run: |
           curl -sL -o uber-apk-signer.jar https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
 
-      - name: Decode APK with apktool (full: smali + resources)
+      - name: "Decode APK with apktool (smali + resources)"
         run: |
           APK="Instagram-v435.0.0.37.76-patches-v3.8.0.apk"
           echo "Decoding $APK ..."
