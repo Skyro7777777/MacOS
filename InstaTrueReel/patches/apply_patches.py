@@ -64,43 +64,31 @@ def main():
         '    # InstaTrueReel: zero top inset\n    const/4 p1, 0x0\n\n    invoke-static {v2, p1, p2}, LX/6wm;->A0w(Landroid/view/View;II)V',
         'A3-top-inset')
 
-    # A1-fix: zero v3 BEFORE the A08 branch (so BOTH branches use transparent color)
-    # The old A1 was inside the bypassed branch (A08 returns 0 for MainActivity → jumps to cond_5)
+    # A6: THE REAL FIX — call 2Ib.A01 (IG's own edge-to-edge helper) at the start of
+    # 2ZS.A01. This does EVERYTHING: setDecorFitsSystemWindows(false) + setStatusBarColor(0)
+    # + setNavigationBarColor(0) + white icons + clear FLAG_TRANSLUCENT_* + add FLAG_DRAWS.
+    # Previous A1fix/A4/A5 patches were insufficient because:
+    # - A1fix zeroed v3 but the deferred Choreographer path (3mE.A00 via ktp) re-applied
+    # - A4 set LAYOUT_FULLSCREEN but windowBackground (theme=black) still showed
+    # - A5 zeroed p1 in 1fC.A04 but other direct setStatusBarColor calls bypassed it
+    # 2Ib.A01 is the splash helper that does proper edge-to-edge. Calling it from 2ZS.A01
+    # (which runs on Reels onResume) makes the window truly edge-to-edge.
     patch_text(zs,
-        '    invoke-static {p0}, LX/2ZS;->A08(Landroid/app/Activity;)Z\n\n    move-result v0\n\n    if-eqz v0, :cond_5',
-        '    invoke-static {p0}, LX/2ZS;->A08(Landroid/app/Activity;)Z\n\n    move-result v0\n\n'
-        '    # InstaTrueReel: zero color for BOTH branches (A08 returns 0 for MainActivity)\n'
-        '    const/4 v3, 0x0\n\n'
-        '    if-eqz v0, :cond_5',
-        'A1fix-zero-v3-before-branch')
-
-    # A4: set SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN so content draws behind status bar
-    # Without this, statusBarColor=0 still shows black (window background) in the status bar area
-    patch_text(zs,
-        '    :cond_5\n    invoke-static {p0, v3}, LX/2ZS;->A00(Landroid/app/Activity;I)V',
-        '    :cond_5\n'
-        '    # InstaTrueReel: set LAYOUT_FULLSCREEN so video draws behind status bar\n'
+        '.method public static final A01(Landroid/app/Activity;Landroidx/fragment/app/Fragment;Lcom/instagram/common/session/UserSession;IZZZ)V\n    .locals 7',
+        '.method public static final A01(Landroid/app/Activity;Landroidx/fragment/app/Fragment;Lcom/instagram/common/session/UserSession;IZZZ)V\n    .locals 7\n\n'
+        '    # InstaTrueReel: enable full edge-to-edge (transparent status + nav bar)\n'
         '    invoke-virtual {p0}, Landroid/app/Activity;->getWindow()Landroid/view/Window;\n'
         '    move-result-object v0\n'
-        '    if-eqz v0, :cond_5_skip\n'
-        '    invoke-virtual {v0}, Landroid/view/Window;->getDecorView()Landroid/view/View;\n'
-        '    move-result-object v0\n'
-        '    if-eqz v0, :cond_5_skip\n'
-        '    invoke-virtual {v0}, Landroid/view/View;->getSystemUiVisibility()I\n'
-        '    move-result v1\n'
-        '    or-int/lit16 v1, v1, 0x1100\n'
-        '    invoke-virtual {v0, v1}, Landroid/view/View;->setSystemUiVisibility(I)V\n'
-        '    :cond_5_skip\n'
-        '    invoke-static {p0, v3}, LX/2ZS;->A00(Landroid/app/Activity;I)V',
-        'A4-layout-fullscreen')
+        '    if-eqz v0, :cond_itre_skip\n'
+        '    const/4 v1, 0x0\n'
+        '    invoke-static {v0, v1}, LX/2Ib;->A01(Landroid/view/Window;Z)V\n'
+        '    :cond_itre_skip',
+        'A6-edge-to-edge')
 
-    # A5: THE KEY FIX — patch 1fC.A04 to always use transparent color (p1=0)
-    # 1fC.A04 is the SINGLE method that calls window.setStatusBarColor(color).
-    # It's called from InstagramMainActivity.onResume (with BLACK) and from C2ZS.A01
-    # (with our zeroed v3). But the deferred Choreographer path + call ordering made
-    # it unreliable. By zeroing p1 at the START of A04, EVERY caller sets transparent.
-    # This is global but safe: non-Reels screens have top padding (insets) so the
-    # transparent status bar just shows the app's black background (looks same as before).
+    # A5: zero p1 in 1fC.A04 so EVERY setStatusBarColor call uses transparent.
+    # A6 sets transparent at the START of 2ZS.A01, but 2ZS.A01:294 calls
+    # 1fC.A04(BLACK) afterward. A5 catches that call (and all others).
+    # A5+A6 together: A6 makes window edge-to-edge, A5 forces all color calls to 0.
     fc = find_smali(decoded, '1fC.smali')
     patch_text(fc,
         '.method public static final A04(Landroid/app/Activity;I)V\n    .locals 4\n\n    :goto_0',
