@@ -87,11 +87,11 @@ def main():
         print("  ❌ B1: InstagramMainActivity.smali not found")
 
     # B0: fix Bloks-encoded layout entries that break aapt compilation
-    layouts_xml = os.path.join(decoded, 'res/values/layouts.xml')
-    if os.path.exists(layouts_xml):
+    # These exist in res/values*/layouts.xml across multiple config dirs
+    layouts_files = glob.glob(os.path.join(decoded, 'res/values*/layouts.xml'))
+    total_fixed = 0
+    for layouts_xml in layouts_files:
         with open(layouts_xml) as f: c = f.read()
-        # Bloks entries look like: <item type="layout" name="x">L|HEX|LEN|HASH</item>
-        # aapt can't compile them — replace with a valid dummy reference
         lines = c.split('\n')
         fixed = 0
         for i, line in enumerate(lines):
@@ -100,11 +100,13 @@ def main():
                 fixed += 1
         if fixed:
             with open(layouts_xml, 'w') as f: f.write('\n'.join(lines))
-            print(f"  ✅ B0-layouts: fixed {fixed} Bloks layout entries")
-        else:
-            print("  ✅ B0-layouts: no Bloks entries found")
+            total_fixed += fixed
+    if total_fixed:
+        print(f"  ✅ B0-layouts: fixed {total_fixed} Bloks entries across {len(layouts_files)} files")
+    elif layouts_files:
+        print("  ✅ B0-layouts: no Bloks entries found")
     else:
-        print("  ⚠️ B0-layouts: layouts.xml not found")
+        print("  ⚠️ B0-layouts: no layouts.xml files found")
 
     # B2: resource patch — transparent clips tab bar background
     styles = os.path.join(decoded, 'res/values/styles.xml')
