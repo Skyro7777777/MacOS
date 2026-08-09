@@ -265,3 +265,48 @@ All 5 original gaps + several bonus items are now closed.
   4. Decide one-shot vs live blur for Feature C frosted glass.
 - STILL no code/patches written (per user: explore only). Next prompt = decide
   whether to start designing/writing Smali patches, or explore more.
+
+---
+
+## 2026-08-09 — Step 4: CODING — patches written + verified + workflow ready
+
+### What was done
+- Downloaded the actual APK (240MB) via GitHub raw URL.
+- Full apktool decode (smali + manifest, 1.9GB, ~1 min).
+- Mapped all jadx-deobfuscated class names to original smali names:
+  C2ZS→X/2ZS, C26630bQ→X/0bQ, C6BM→X/6BM, VBP→X/VBP, EPN→X/EPN, etc.
+  (jadx --deobf prepends a hash prefix; the SUFFIX matches the original name.)
+- Read the exact smali for each patch target (VBP FSS/EvT, 2ZS A01, 6BM Fji,
+  0bQ A04, InstagramMainActivity A0V, EPN dimming, BottomSheetFragment).
+- Wrote `apply_patches.py` with 9 patches covering all 4 features.
+- Tested locally: all 9 patterns found, all 9 patches applied successfully.
+- Verified patched smali looks correct (VBP FSS/EvT rotation code clean).
+- Wrote `insta-truereel-build.yml` workflow (decode → patch → build → sign → upload).
+
+### Patches summary (9 total)
+- A1: 2ZS.smali — decorView bg → transparent (v3→0 before 0cW.A0R)
+- A2: 2ZS.smali — android.R.id.content bg → transparent (p2→0)
+- A3: 6BM.smali — zero top inset (p1→0 before setPadding)
+- B1: InstagramMainActivity.smali — zero swipeable_tab_view_pager bottomMargin (3 sites)
+- B2: styles.xml — igds_color_clips_tab_bar_background → #00000000 (4 theme variants)
+- C1: EPN.smali — zero ALL dimming alpha calls (8 0cW.A05 calls)
+- C2: BottomSheetFragment.smali — setColorFilter color → 0xCC000000 (80% black, 2 sites)
+- D1: VBP.smali FSS — setRequestedOrientation(LANDSCAPE=0) at method start
+- D2: VBP.smali EvT — setRequestedOrientation(USER=14) at method start
+
+### Key smali details verified
+- VBP.A02 (RE7) → RE7.A0B (X/9eY) → 9eY.A04 (FragmentActivity) — confirmed field chain
+- 6mW.A00(Activity, int) — confirmed: calls setRequestedOrientation, catches IllegalStateException
+- Manifest: configChanges includes orientation|screenSize (no recreate on rotation) ✅
+- screenOrientation="locked" — overridden by runtime setRequestedOrientation ✅
+- Icons already white (igds_prism_gray_00 = #fff8f9f9) — only bg needs fixing ✅
+
+### Not yet implemented (future iterations)
+- Feature D seekbar (force-show VideoScrubberSeekBar via MobileConfig flip)
+- Feature C true frosted blur (FrostedOverlayView)
+- Force-fill scaling (setForceFillTextureScaling)
+- Reels-only gating for A3 (currently global)
+
+### Next step
+User triggers the workflow → downloads patched APK → tests on Android 10+.
+Iterate based on what works/breaks.
