@@ -80,3 +80,77 @@ user's phone. (3) can trickle in.
 - Whether the comment sheet is a BottomSheetDialogFragment or custom.
 - Whether Instagram's expand button already does TikTok-style fullscreen.
 - Android version of the user's test device (affects inset API path).
+
+---
+
+## 2026-08-09 — Step 2: ACTUAL source exploration (corrected course)
+
+### Course correction (from user feedback)
+User said I went far off: focused on building a patcher instead of understanding
+the decompiled Instagram + the features. Also never downloaded the artifact
+(the MAIN thing). Also wrongly leaned on `Screenshot_20260808-145028__01.jpg`
+(from a previous failed conversation; its button did nothing). Corrected:
+downloaded the 156 MB artifact, unzipped to 175,407 Java files (1.3 GB) at
+`/home/z/insta-src/jadx-out/sources/`, dispatched 5 parallel Explore agents.
+
+### What the 5 agents found (file:line evidence, not brainstorm)
+See `findings/00-overview.md` for the full master index. Highlights:
+
+**Root causes of the black strips (all confirmed in code):**
+- Top: `InstagramMainActivity.java:3256` sets statusBarColor=BLACK;
+  `p002X/C2ZS.java:102` re-sets it black (undoing the transparent call at :99);
+  `:86`/`:131` paint decorView/content black.
+- Bottom: `InstagramMainActivity.java:3261` sets navBarColor=BLACK;
+  `p002X/C26630bQ.A04:124,127,132,137` paints tab_bar black.
+- THE GAP below the video: `InstagramMainActivity.java:1421` sets
+  `swipeable_tab_view_pager.bottomMargin = tabBarHeight`. This margin IS the
+  black strip. Setting it to 0 removes the gap.
+- Why video doesn't go under status bar: `IgFragmentActivity.java:735`
+  registers `C6BM` which applies system insets as padding (`C6BM.java:34-49`).
+  ClipsViewerFragment itself makes ZERO window/inset calls — inherits activity
+  state. So fix must be at activity level (or gated on "Reels on top" via
+  `IgFragmentActivity.A1g():685`).
+
+**Feature B (bottom nav) — best news:** IG does NOT hide the bar on Reels
+(`Gvc():7992` keeps VISIBLE; only colors change). So the floating-transparent
+approach is a clean fit — just make bg transparent + icons white + zero the
+bottomMargin. 3 concrete hooks found.
+
+**Feature C (comment sheet) — best news:** IG already HAS a reusable blur view:
+`com/instagram/p132ui/legibilityoverlay/FrostedOverlayView.java` —
+`RenderEffect.createBlurEffect(15f,15f,CLAMP)` on API 31+ with a 27%-scale CPU
+box-blur fallback. Drop-in for true frosted glass. Plus 3 opaque layers to
+neutralize (sheet panel, clips_media_dimming_view, background_dimmer).
+
+**Feature D (existing fullscreen) — confirmed user's description:**
+- Existing "fullscreen" = fade-out of side UFI buttons (alpha=0, NOT GONE) via
+  `VBP.FSS()`/`VBP.EvT()`, triggered by swipe gesture. Also a "Fullscreen"
+  entry in the long-press popup (`VSL.java`).
+- NO rotation (no setRequestedOrientation in clips). NO seekbar
+  (SimpleVideoLayout has no getDuration/getCurrentPosition/seekTo).
+- Hook points for TikTok-style: add setRequestedOrientation(LANDSCAPE) at
+  `VBP.java:116` (enter), PORTRAIT at `:47` (exit); add a SeekBar overlay.
+  Side-button hide is FREE (reuse the toggle).
+
+### Remaining gaps (for next prompt)
+1. Locate the player instance (getCurrentPosition/getDuration/seekTo) for the
+   Feature D seekbar — read `C257899eY`, `C3BT`, grep `p002X/` for the player
+   interface. SimpleVideoLayout exposes none.
+2. Decompile tail of `I34.run()` case 33 — confirm popup menu path calls
+   `VBP.FSS` (else hook it separately).
+3. apktool decode for resources — layout XMLs, themes, drawables, strings are
+   NOT in the jadx dump (--no-res). Required for any XML/drawable/color patch.
+4. Runtime-verify the BottomSheetFragment.onViewCreated branch (prism drawable
+   vs GradientDrawable) for Reels comments.
+5. Confirm activity access from `VBP` (plain object, not Fragment).
+
+### Status
+- No code/patches written (still understanding, per user).
+- 5 findings docs (3-a..3-e, ~3000 lines total) + 00-overview master index
+  committed to repo.
+- Next decision point for the user: (a) dispatch a focused agent for the
+  remaining gaps (player instance + I34.run case 33 + apktool-res), or
+  (b) start designing the actual Smali patches against the confirmed hooks,
+  or (c) answer the still-open product questions (Q2 stretch-vs-crop, Q3
+  status bar visible-vs-hidden, Q4 scope reels-only, Q7 build approach,
+  Q9 Android version).

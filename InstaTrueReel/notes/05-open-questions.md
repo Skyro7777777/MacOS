@@ -2,17 +2,34 @@
 
 Things to resolve before/while coding. Some need the user; some need source.
 
-## Q1 — Does Instagram v435's existing "expand" button already do TikTok-style fullscreen?
-Screenshot F (`Screenshot_20260808-145028__01.jpg`) shows an expand icon
-(upper-right) on a letterboxed horizontal Reel. We need to know:
-- Does tapping it **rotate to landscape** and hide the side buttons + show a
-  seekbar (TikTok-like)? Or does it just zoom/crop within the vertical frame?
-- **Action:** explore the source (Feature D target) AND/OR the user tests the
-  button on-device and reports behavior.
-- If it already does the right thing → Feature D is "done," we just confirm.
-- If it does a lesser thing → we enhance its handler (force landscape
-  orientation, hide side-action column, add/show a seekbar).
-- If the user wasn't aware of it → clarify whether they still want changes.
+## Q1 — RESOLVED (by source exploration, agent 3-e)
+The user clarified: Instagram already has a "fullscreen" feature that **only
+hides the side like/comment/share buttons and does nothing else** — no rotation,
+no seekbar. Source confirms exactly this:
+- The existing "fullscreen" is **NOT** a separate Fragment/Activity. It is a
+  **fade-out of the side UFI buttons** via alpha=0.0f, triggered by a swipe
+  gesture. Handler: `VBP.FSS(i,i2)` enters (`p002X/VBP.java:116-170`),
+  `VBP.EvT()` exits (`:47-88`). Fade animator = `EPN`.
+- State flags on `ClipsItemState` (`C11R.java:78-80`): `isFullscreenViewActive`,
+  `isFillToScreenActive`, `isFullscreenViewNuxActive` (immutable Builder fields).
+- There is a "Fullscreen" entry in the long-press/three-dot popup
+  (`VSL.java:26-44` → `MediaOption$Option.FULLSCREEN_VIEW`, label
+  `R.string 2131984733`). The "expand icon" seen on landscape reels in the old
+  screenshot is almost certainly this popup-menu entry (no always-visible inline
+  expand-button exists in code).
+- **Confirmed:** NO `setRequestedOrientation` anywhere in clips → no rotation.
+  `SimpleVideoLayout` exposes no getDuration/getCurrentPosition/seekTo → no seekbar.
+- **Verdict for Feature D:** enhance `VBP.FSS`/`VBP.EvT` — ADD
+  `setRequestedOrientation(LANDSCAPE/PORTRAIT)` + ADD a seekbar overlay. The
+  side-button hide is already free (reuse the toggle).
+- ⚠️ NOTE: the screenshot `Screenshot_20260808-145028__01.jpg` (and its
+  "expand button") was from a **previous failed conversation** and the button
+  there did nothing on click — per the user. Disregard it as a reference.
+  See `findings/00-overview.md` Feature D section for the real hook points.
+- **Still-open sub-item:** the player instance exposing
+  getCurrentPosition/getDuration/seekTo is NOT yet located
+  (`SimpleVideoLayout`/`AbstractC210917ky` expose none). Needs follow-up
+  exploration (read `C257899eY`, `C3BT`; grep `p002X/` for the player interface).
 
 ## Q2 — Stretch vs crop?
 The user said: "I haven't much idea that on instagram whether insta crops upper
