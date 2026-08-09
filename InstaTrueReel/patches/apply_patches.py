@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """
-InstaTrueReel — apply_patches.py
-Runs AFTER apktool decode, BEFORE apktool build.
+InstaTrueReel — apply_patches.py (v2: smali-only, no resource recompilation)
+Runs AFTER `apktool d -r` (resources kept as binary), BEFORE `apktool b`.
 
 Usage: python3 apply_patches.py <decoded_dir>
+
+v2 changes (crash fix):
+  - Decode with -r (no resource decode) → original resources.arsc preserved
+  - Dropped B0 (Bloks layouts.xml fix) — not needed, was corrupting resources
+  - Dropped B2-resource (styles.xml) — replaced by B2-smali (patch 0bQ.A04)
+  - Dropped manifest attribute removal — not needed with -r
+  - All patches are now pure smali (no XML/resource changes)
 """
 
 import os, re, sys, glob
 
 def find_smali(decoded, name):
-    """Find a .smali file by name (fast: check known smali_classes dirs)."""
+    """Find a .smali file by name across all smali_classes dirs."""
     for d in sorted(glob.glob(os.path.join(decoded, 'smali*'))):
         for root, _, files in os.walk(d):
             if name in files:
@@ -27,23 +34,12 @@ def patch_text(filepath, old, new, label):
         with open(filepath, 'w') as f: f.write(c)
         print(f"  ✅ {label}: applied")
         return True
-    print(f"  ⚠️ {label}: pattern not found")
+    print(f"  ⚠️ {label}: pattern not found (may already be patched)")
     return False
 
 def main():
     decoded = sys.argv[1] if len(sys.argv) > 1 else 'decoded'
-    print("=" * 60 + "\nInstaTrueReel — applying patches\n" + "=" * 60)
-
-    # ── Pre-flight: fix manifest attributes unknown to aapt ─────
-    manifest = os.path.join(decoded, 'AndroidManifest.xml')
-    if os.path.exists(manifest):
-        with open(manifest) as f: c = f.read()
-        # Remove attributes that older aapt2 can't process
-        for attr in ['allowCrossUidActivitySwitchFromBelow', 'knownActivityEmbeddingCerts']:
-            if attr in c:
-                c = re.sub(r'\s*android:' + attr + r'="[^"]*"', '', c)
-                print(f"  ✅ manifest: removed android:{attr}")
-        with open(manifest, 'w') as f: f.write(c)
+    print("=" * 60 + "\nInstaTrueReel — applying patches (v2: smali-only)\n" + "=" * 60)
 
     # ── Feature A: transparent status bar ──────────────────────
     print("\n── Feature A: transparent status bar ──")
@@ -61,7 +57,7 @@ def main():
         '    const v0, -0x7ff859fd\n\n    # InstaTrueReel: content transparent\n    const/4 p2, 0x0\n\n    invoke-static {p0, p2, v0}, LX/0cW;->A0R(Landroid/view/View;II)V',
         'A2-content')
 
-    # A3: zero top inset before setPadding in C6BM
+    # A3: zero top inset before setPadding in C6BM (pswitch_3 → cond_3 branch)
     bm = find_smali(decoded, '6BM.smali')
     patch_text(bm,
         '    invoke-static {v2, p1, p2}, LX/6wm;->A0w(Landroid/view/View;II)V',
@@ -97,42 +93,36 @@ def main():
     else:
         print("  ❌ B1: InstagramMainActivity.smali not found")
 
-    # B0: fix Bloks-encoded layout entries that break aapt compilation
-    # These exist in res/values*/layouts.xml across multiple config dirs
-    layouts_files = glob.glob(os.path.join(decoded, 'res/values*/layouts.xml'))
-    total_fixed = 0
-    for layouts_xml in layouts_files:
-        with open(layouts_xml) as f: c = f.read()
-        lines = c.split('\n')
-        fixed = 0
-        for i, line in enumerate(lines):
-            if '<item type="layout"' in line and '>L|' in line:
-                lines[i] = re.sub(r'>L\|[^<]*<', '>@layout/abc_action_bar_title_item<', line)
-                fixed += 1
-        if fixed:
-            with open(layouts_xml, 'w') as f: f.write('\n'.join(lines))
-            total_fixed += fixed
-    if total_fixed:
-        print(f"  ✅ B0-layouts: fixed {total_fixed} Bloks entries across {len(layouts_files)} files")
-    elif layouts_files:
-        print("  ✅ B0-layouts: no Bloks entries found")
-    else:
-        print("  ⚠️ B0-layouts: no layouts.xml files found")
-
-    # B2: resource patch — transparent clips tab bar background
-    styles = os.path.join(decoded, 'res/values/styles.xml')
-    if os.path.exists(styles):
-        with open(styles) as f: c = f.read()
-        old = '<item name="igds_color_clips_tab_bar_background">@color/igds_prism_black</item>'
-        new = '<item name="igds_color_clips_tab_bar_background">#00000000</item>'
-        cnt = c.count(old)
-        if cnt:
-            with open(styles, 'w') as f: f.write(c.replace(old, new))
-            print(f"  ✅ B2-styles: {cnt} replacement(s)")
+    # B2-smali: patch 0bQ.A04 to zero the color before each setBackgroundColor
+    # This replaces the resource-level styles.xml patch (which required resource recompilation)
+    bq = find_smali(decoded, '0bQ.smali')
+    if bq:
+        with open(bq) as f: c = f.read()
+        # Find the A04 method and insert const/4 v1, 0x0 before each A0R call within it
+        # Pattern: "const v0, <hash>\n\n    invoke-static {vN, v1, v0}, LX/0cW;->A0R"
+        # We match the invoke-static line and insert const/4 v1, 0x0 before it
+        method_start = c.find('.method public static final A04(')
+        if method_start >= 0:
+            method_end = c.find('.end method', method_start)
+            method_body = c[method_start:method_end]
+            # Insert const/4 v1, 0x0 before each "invoke-static {vN, v1, v0}, LX/0cW;->A0R"
+            # within the A04 method only
+            new_body = re.sub(
+                r'(    const v0, -?(?:0x)?[0-9a-fA-F]+\n\n    )(invoke-static \{v\d, v1, v0\}, LX/0cW;->A0R\(Landroid/view/View;II\)V)',
+                r'\1# InstaTrueReel: transparent bg\n    const/4 v1, 0x0\n\n    \2',
+                method_body
+            )
+            if new_body != method_body:
+                c = c[:method_start] + new_body + c[method_end:]
+                with open(bq, 'w') as f: f.write(c)
+                count = new_body.count('InstaTrueReel: transparent bg')
+                print(f"  ✅ B2-smali: zeroed {count} bgcolor calls in 0bQ.A04")
+            else:
+                print("  ⚠️ B2-smali: no A0R patterns found in A04")
         else:
-            print("  ⚠️ B2-styles: pattern not found")
+            print("  ⚠️ B2-smali: A04 method not found in 0bQ.smali")
     else:
-        print("  ⚠️ B2-styles: styles.xml not found (will use smali fallback)")
+        print("  ❌ B2-smali: 0bQ.smali not found")
 
     # ── Feature C: translucent comment sheet ───────────────────
     print("\n── Feature C: translucent comment sheet ──")
@@ -190,6 +180,7 @@ def main():
     vbp = find_smali(decoded, 'VBP.smali')
 
     # D1: FSS — rotate to landscape (0) on fullscreen enter
+    # Uses move-object/from16 v0, p0 because .locals 21 → p0 = v21 (> v15 limit)
     patch_text(vbp,
         '.method public final FSS(II)V\n    .locals 21\n\n    move-object/from16 v2, p0',
         '.method public final FSS(II)V\n    .locals 21\n\n'
@@ -217,7 +208,7 @@ def main():
         '    const/4 v2, 0x0',
         'D2-EvT-portrait')
 
-    print("\n" + "=" * 60 + "\nInstaTrueReel — done\n" + "=" * 60)
+    print("\n" + "=" * 60 + "\nInstaTrueReel — done (v2: smali-only)\n" + "=" * 60)
 
 if __name__ == '__main__':
     main()
