@@ -64,6 +64,36 @@ def main():
         '    # InstaTrueReel: zero top inset\n    const/4 p1, 0x0\n\n    invoke-static {v2, p1, p2}, LX/6wm;->A0w(Landroid/view/View;II)V',
         'A3-top-inset')
 
+    # A1-fix: zero v3 BEFORE the A08 branch (so BOTH branches use transparent color)
+    # The old A1 was inside the bypassed branch (A08 returns 0 for MainActivity → jumps to cond_5)
+    patch_text(zs,
+        '    invoke-static {p0}, LX/2ZS;->A08(Landroid/app/Activity;)Z\n\n    move-result v0\n\n    if-eqz v0, :cond_5',
+        '    invoke-static {p0}, LX/2ZS;->A08(Landroid/app/Activity;)Z\n\n    move-result v0\n\n'
+        '    # InstaTrueReel: zero color for BOTH branches (A08 returns 0 for MainActivity)\n'
+        '    const/4 v3, 0x0\n\n'
+        '    if-eqz v0, :cond_5',
+        'A1fix-zero-v3-before-branch')
+
+    # A4: set SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN so content draws behind status bar
+    # Without this, statusBarColor=0 still shows black (window background) in the status bar area
+    patch_text(zs,
+        '    :cond_5\n    invoke-static {p0, v3}, LX/2ZS;->A00(Landroid/app/Activity;I)V',
+        '    :cond_5\n'
+        '    # InstaTrueReel: set LAYOUT_FULLSCREEN so video draws behind status bar\n'
+        '    invoke-virtual {p0}, Landroid/app/Activity;->getWindow()Landroid/view/Window;\n'
+        '    move-result-object v0\n'
+        '    if-eqz v0, :cond_5_skip\n'
+        '    invoke-virtual {v0}, Landroid/view/Window;->getDecorView()Landroid/view/View;\n'
+        '    move-result-object v0\n'
+        '    if-eqz v0, :cond_5_skip\n'
+        '    invoke-virtual {v0}, Landroid/view/View;->getSystemUiVisibility()I\n'
+        '    move-result v1\n'
+        '    or-int/lit16 v1, v1, 0x1100\n'
+        '    invoke-virtual {v0, v1}, Landroid/view/View;->setSystemUiVisibility(I)V\n'
+        '    :cond_5_skip\n'
+        '    invoke-static {p0, v3}, LX/2ZS;->A00(Landroid/app/Activity;I)V',
+        'A4-layout-fullscreen')
+
     # ── Feature B: floating bottom nav ─────────────────────────
     print("\n── Feature B: floating bottom nav ──")
 
@@ -123,6 +153,40 @@ def main():
             print("  ⚠️ B2-smali: A04 method not found in 0bQ.smali")
     else:
         print("  ❌ B2-smali: 0bQ.smali not found")
+
+    # B3: raise caption above bottom nav (was overlapping after B1 zeroed bottomMargin)
+    # Change PADDING_BOTTOM from 0.0 to 168.0 (≈56dp at 3x density) in the reel overlay Litho section
+    g3 = find_smali(decoded, '33g.smali')
+    patch_text(g3,
+        '    sget-object v28, LX/0XB;->A02:LX/4qC;\n\n    const-wide/16 v3, 0x0\n\n    invoke-static {v3, v4}, Ljava/lang/Double;->doubleToRawLongBits(D)J',
+        '    sget-object v28, LX/0XB;->A02:LX/4qC;\n\n'
+        '    # InstaTrueReel: caption padding bottom (168.0 = ~56dp)\n'
+        '    const-wide v3, 0x4065000000000000L\n\n'
+        '    invoke-static {v3, v4}, Ljava/lang/Double;->doubleToRawLongBits(D)J',
+        'B3-caption-padding')
+
+    # B4: transparent comment input bar (bottom_sheet_container, C6BM.pswitch_6)
+    # The "Add Comments..." bar that replaces the main nav when viewing a reel from feed
+    # Its background is set via layout XML (can't patch with -r decode), so we zero it in code
+    if bm:
+        # Branch 1: after margin calls on v1 (0x7f0b06b3)
+        patch_text(bm,
+            '    invoke-static {v1, p1}, LX/6wm;->A0p(Landroid/view/View;I)V\n\n    :cond_5',
+            '    invoke-static {v1, p1}, LX/6wm;->A0p(Landroid/view/View;I)V\n\n'
+            '    # InstaTrueReel: transparent comment composer bar\n'
+            '    const/4 v3, 0x0\n\n'
+            '    invoke-virtual {v1, v3}, Landroid/view/View;->setBackgroundColor(I)V\n\n'
+            '    :cond_5',
+            'B4-1-comment-bar')
+        # Branch 2: after margin calls on v0 (0x7f0b06b2)
+        patch_text(bm,
+            '    invoke-static {v0, p1}, LX/6wm;->A0p(Landroid/view/View;I)V\n\n    goto :goto_1',
+            '    invoke-static {v0, p1}, LX/6wm;->A0p(Landroid/view/View;I)V\n\n'
+            '    # InstaTrueReel: transparent comment composer bar\n'
+            '    const/4 v3, 0x0\n\n'
+            '    invoke-virtual {v0, v3}, Landroid/view/View;->setBackgroundColor(I)V\n\n'
+            '    goto :goto_1',
+            'B4-2-comment-bar')
 
     # ── Feature C: translucent comment sheet ───────────────────
     print("\n── Feature C: translucent comment sheet ──")
@@ -208,7 +272,19 @@ def main():
         '    const/4 v2, 0x0',
         'D2-EvT-portrait')
 
-    print("\n" + "=" * 60 + "\nInstaTrueReel — done (v2: smali-only)\n" + "=" * 60)
+    # D3: force-show the scrubber (seekbar) overlay on reels
+    # IG already ships VideoScrubberSeekBar but gates it behind a boolean (A0x)
+    # Change iget-boolean → const/4 v1, 0x1 to always include the scrubber
+    if g3:
+        patch_text(g3,
+            '    invoke-virtual {v6, v1}, LX/0XG;->A00(LX/2Yc;)V\n\n    iget-boolean v1, v0, LX/33g;->A0x:Z\n\n    const/4 v4, 0x0',
+            '    invoke-virtual {v6, v1}, LX/0XG;->A00(LX/2Yc;)V\n\n'
+            '    # InstaTrueReel: force-show scrubber\n'
+            '    const/4 v1, 0x1\n\n'
+            '    const/4 v4, 0x0',
+            'D3-force-scrubber')
+
+    print("\n" + "=" * 60 + "\nInstaTrueReel — done (v3: targeted fixes)\n" + "=" * 60)
 
 if __name__ == '__main__':
     main()
