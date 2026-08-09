@@ -154,3 +154,114 @@ neutralize (sheet panel, clips_media_dimming_view, background_dimmer).
   or (c) answer the still-open product questions (Q2 stretch-vs-crop, Q3
   status bar visible-vs-hidden, Q4 scope reels-only, Q7 build approach,
   Q9 Android version).
+
+---
+
+## 2026-08-09 — Step 3: closed all remaining gaps (4 more agents + apktool resources)
+
+### What was done
+Dispatched 4 more parallel Explore agents (4-a..4-d) over the decompiled source
+AND did an apktool resource decode of the actual APK (downloaded via GitHub raw
+URL since git-lfs wasn't installed; 240 MB APK → 574 MB resources in 14 sec).
+All 5 original gaps + several bonus items are now closed.
+
+### Agent 4-a (player instance + seekbar) — BIG win
+- Located the full player chain: ClipsViewerFragment → C257899eY
+  (ClipsVideoPlayerController) → C3HU interface → C89843a5W (ClipsVideoPlayer)
+  → C50741Yd (VideoPlayerImpl) → C50301Wl (IgGrootPlayer) → C52701cN
+  (FB Groot/ExoPlayer fork).
+- Player API EXISTS: C50741Yd has BbK()=getCurrentPositionMs, A0P()=getDurationMs,
+  A0V(float,int)=seekToNormalized, A0r()=isPlaying, A0h(boolean)=play/pause.
+  C3HU has setScrubbingModeEnabled + GzY(float,int)=seekTo normalized.
+- **IG ALREADY SHIPS a TikTok-style seekbar**: `VideoScrubberSeekBar`
+  (com.instagram.p132ui.mediaactions.VideoScrubberSeekBar) with keyframe markers
+  + thumbnail preview + chapter text. It's mounted via Litho component
+  `C30423BTc` (LegacyClipsAttachedScrubberComponent), gated behind MobileConfig
+  flag 36320867680860001L + a duration gate (ClipsProgressUiState).
+- **Feature D seekbar verdict:** REUSE the existing scrubber — force-show it by
+  flipping the MobileConfig flag / duration gate. NO custom SeekBar needed.
+- Bonus: listener FV2(width,height,isPortrait) = video-size-changed event →
+  use width>height as the landscape gate for Feature D rotation.
+
+### Agent 4-b (popup menu path + VBP activity access)
+- I34.run() case 33 does NOT call VBP.FSS — it calls C14U.FGC (stores fullscreen
+  target + analytics). The newer IA5.F6G path lands at C15T:1211 (case LAGOS/114)
+  which just logs. So the popup "Fullscreen" entry is currently a NO-OP visually
+  (matches user's "did nothing on click"). VBP.FSS is invoked ONLY by gesture
+  broadcasters (AnonymousClass940:548, C106638kpe:131).
+- VBP gets Activity via: VBP.A02 (RE7) → re7.A0B (C257899eY) → c257899eY.A04
+  (FragmentActivity = InstagramMainActivity). Clean.
+- **Orientation helper to use:** AbstractC186396mW.A00(activity, int) — pure
+  static, catches the "Only fullscreen activities can request orientation"
+  IllegalStateException. NOT C99744f1m (3-e was mislabeled; that one mutates
+  LinearLayouts for FB Horizon cloud gaming).
+- Feature D rotation one-liners confirmed at VBP.java:116 (enter, LANDSCAPE=0)
+  and VBP.java:47 (exit, USER=14). Plus optional second hook at C15T:1211 for
+  the popup-menu path.
+
+### Agent 4-c (force-fill + orientation + Reels detection)
+- **setForceFillTextureScaling(true) = ZOOM-CROP (preserves aspect), NOT
+  stretch-distort.** For a 9:16 video in a 1080×2400 container → TextureView
+  becomes 1350×2400, crops 135px each side, fills full height. So force-fill
+  makes the video reach top+bottom IF the container is edge-to-edge (Feature A).
+  The two fixes are complementary. Currently clips viewer uses default 0.25d
+  (FIT); only feed binder C8NA:187 calls setForceFillTextureScaling.
+- **Reels-on-top detection:** A1g() is NOT reliable (returns top-level tab host,
+  not ClipsTabFragment). Better: patch C2ZS.A01 directly — its call site
+  (ClipsTabFragment.onResume:860) IS already the "Reels on top" gate. No extra
+  runtime check needed for window-chrome patches.
+- **Config-change resilience:** InstagramMainActivity.onConfigurationChanged
+  (A1p:4078-4180) re-paints tab_bar via C26630bQ.A04:4112 — undoes transparent-
+  nav patches on rotation. So patch C26630bQ.A04 ITSELF (single chokepoint
+  called from both C2ZS.A01:42 and A1p:4112) to survive rotation. Window-level
+  patches (setStatusBarColor etc.) survive rotation (not re-touched by A1p).
+
+### Agent 4-d (comment sheet runtime branch + dimming)
+- BottomSheetFragment runtime branch for Reels: Branch C → setColorFilter at
+  BottomSheetFragment.java:1646 (color2 = igds_color_elevated_background,
+  opaque). So the ColorFilter is the final paint — patch line 1646.
+- EPN.java:534 sets clips_media_dimming_view alpha = 1.0 - fA05; when sheet
+  open, fA05=0 → alpha=1.0 (opaque black). Patch → 0.0f to kill dimming.
+- C109193lI (scrim): background_dimmer is a full-screen TouchInterceptorFrameLayout,
+  alpha = slide fraction (1.0 when open), color 0xFF000000. Patch lines 546+724
+  → multiply alpha by 0.4 for translucency.
+- clips_media_dimming_view = plain View (not blur), ON TOP of video, BEHIND
+  sheet. Three opaque layers all block video.
+- FrostedOverlayView: setupFrom(View, IgProgressImageView) snapshots any source
+  view via view.draw(canvas) + RenderEffect blur (API 31+) / CPU fallback.
+  Can blur the clips ViewPager from inside the comment sheet container.
+  One-shot snapshot; live blur needs Choreographer loop.
+
+### apktool resource decode (4-e) — the missing half
+- MainActivity manifest: configChanges includes orientation|screenSize (rotation
+  doesn't recreate activity — patches survive ✅) + screenOrientation="locked"
+  (overridden by runtime setRequestedOrientation ✅).
+- Runtime theme: Theme.Instagram → Base.Theme.Instagram sets windowBackground +
+  statusBarColor = ?igds_color_primary_background (= igds_prism_black = #ff0c1014,
+  dark blue-gray not pure black).
+- igds_color_clips_tab_bar_background = igds_prism_black = #ff0c1014.
+  igds_color_clips_tab_bar_icon = igds_prism_gray_00 = #fff8f9f9 — **icons
+  ALREADY white** ✅ (only bg needs fixing).
+- tabBarHeight = theme attr → @dimen/tab_bar_height_panorama = 44dp(hdpi)/48dp(xxhdpi).
+- tab_bar = TouchInterceptorLinearLayout in layout_activity_main_internal_viewpager2.xml,
+  layout_gravity=bottom, height=?tabBarHeight. swipeable_tab_view_pager (Reels host)
+  = fill_parent with NO XML bottomMargin (code adds it at :1421).
+- **CRITICAL:** layout_clips_tab_fragment, layout_clips_viewer_fragment,
+  bottom_sheet_fragment do NOT exist as XML → they're Bloks/Litho (code-defined).
+  So Reels viewer + comment sheet + scrubber patches MUST be Smali (no XML).
+  Only tab_bar bg (Feature B) and the prism drawable (Feature C partial) can be
+  resource-patched.
+- igds_bottom_sheet_background_prism.xml EXISTS (shape, solid=?igds_color_elevated_background).
+  Trivial to make translucent, BUT runtime uses ColorFilter (line 1646) on top —
+  must patch the code path too.
+
+### Status after step 3
+- All 5 original gaps CLOSED. Player found. Popup path traced. Force-fill
+  understood. Comment sheet branch confirmed. Resources decoded.
+- New minor open items (non-blocking, for the eventual patching phase):
+  1. Verify production prism state (determines ColorFilter patch location).
+  2. Find exact MobileConfig values to flip for the scrubber (36320867680860001L).
+  3. Confirm C30423BTc is mounted in the clips Litho tree (vs needing to mount).
+  4. Decide one-shot vs live blur for Feature C frosted glass.
+- STILL no code/patches written (per user: explore only). Next prompt = decide
+  whether to start designing/writing Smali patches, or explore more.
