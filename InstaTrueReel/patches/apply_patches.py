@@ -34,6 +34,17 @@ def main():
     decoded = sys.argv[1] if len(sys.argv) > 1 else 'decoded'
     print("=" * 60 + "\nInstaTrueReel — applying patches\n" + "=" * 60)
 
+    # ── Pre-flight: fix manifest attributes unknown to aapt ─────
+    manifest = os.path.join(decoded, 'AndroidManifest.xml')
+    if os.path.exists(manifest):
+        with open(manifest) as f: c = f.read()
+        # Remove attributes that older aapt2 can't process
+        for attr in ['allowCrossUidActivitySwitchFromBelow', 'knownActivityEmbeddingCerts']:
+            if attr in c:
+                c = re.sub(r'\s*android:' + attr + r'="[^"]*"', '', c)
+                print(f"  ✅ manifest: removed android:{attr}")
+        with open(manifest, 'w') as f: f.write(c)
+
     # ── Feature A: transparent status bar ──────────────────────
     print("\n── Feature A: transparent status bar ──")
     zs = find_smali(decoded, '2ZS.smali')

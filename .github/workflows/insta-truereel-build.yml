@@ -24,9 +24,9 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Download apktool 2.9.3
+      - name: Download apktool 3.0.3
         run: |
-          curl -sL -o apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar
+          curl -sL -o apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar
           java -jar apktool.jar --version
 
       - name: Download uber-apk-signer
