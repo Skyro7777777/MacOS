@@ -111,6 +111,21 @@ def main():
         '    :goto_0',
         'A5-force-transparent-statusbar')
 
+    # A7: THE MISSING FIX — zero p1 in 2ZS.A00 so 47l Runnable gets transparent color.
+    # 2ZS.A00 creates a 47l Runnable with the color arg, which paints
+    # swipe_navigation_container (the top-level FrameLayout) with setBackgroundColor.
+    # This is the LAST WRITER — it runs AFTER A6 and overrides everything.
+    # v6 accidentally removed A1fix (which zeroed v3 feeding into A00). A7 catches
+    # it at the method level: zero p1 at the start of A00, so 47l ALWAYS gets 0.
+    # This is analogous to A5 (zero p1 in 1fC.A04).
+    patch_text(zs,
+        '.method public static final A00(Landroid/app/Activity;I)V\n    .locals 1\n    .annotation build Ldalvik/annotation/optimization/NeverInline;\n    .end annotation\n\n    new-instance v0, LX/47l;',
+        '.method public static final A00(Landroid/app/Activity;I)V\n    .locals 1\n    .annotation build Ldalvik/annotation/optimization/NeverInline;\n    .end annotation\n\n'
+        '    # InstaTrueReel: force transparent swipe_nav bg (47l Runnable)\n'
+        '    const/4 p1, 0x0\n\n'
+        '    new-instance v0, LX/47l;',
+        'A7-transparent-swipenav')
+
     # ── Feature B: floating bottom nav ─────────────────────────
     print("\n── Feature B: floating bottom nav ──")
 
