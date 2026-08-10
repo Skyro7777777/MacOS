@@ -41,7 +41,7 @@ jobs:
 
           # ── 1. Extract specific smali files by name (preserve relative path) ──
           echo "=== Extracting target smali files ==="
-          for name in BottomSheetFragment G28 6BM 1fC 2ZS 0bQ EPN VBP 33g; do
+          for name in BottomSheetFragment G28 6BM 1fC 2ZS 0bQ EPN VBP 33g Krc YfD 9b7; do
             find decoded/smali* -name "${name}.smali" | while read f; do
               rel=$(echo "$f" | sed 's|decoded/||')
               mkdir -p "extraction/smali-files/$(dirname "$rel")"
@@ -102,6 +102,17 @@ jobs:
 
           # CommentListBottomsheet references (to trace the comments flow)
           grep -rn 'CommentListBottomsheet\|C54625Krc\|C86682YfD' decoded/smali*/ > extraction/greps/comment-fragment-refs.txt 2>/dev/null || true
+
+          # comment_composer / EditText View ID references (for gray box patch)
+          grep -rn 'comment_composer\|layout_comment_thread_edittext\|ComposerAutoCompleteTextView' decoded/smali*/ > extraction/greps/comment-composer-refs.txt 2>/dev/null || true
+
+          # setBackgroundColor calls in Krc.smali (comment fragment)
+          KRC=$(find decoded/smali* -name "Krc.smali" | head -1)
+          if [ -n "$KRC" ]; then
+            grep -n 'setBackgroundColor\|setBackground\|findViewById\|0cW;->A0R\|0cW;->A03' "$KRC" > extraction/greps/Krc-bg-calls.txt || true
+            echo "=== Krc.smali bg/findViewById calls ==="
+            cat extraction/greps/Krc-bg-calls.txt
+          fi
 
           # setStatusBarColor — for reference
           grep -rn -C 3 "setStatusBarColor" decoded/smali*/ > extraction/greps/setStatusBarColor-context.txt 2>/dev/null || true

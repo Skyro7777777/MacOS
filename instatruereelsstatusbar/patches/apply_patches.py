@@ -307,6 +307,90 @@ def main():
     else:
         print("  X CS1: BottomSheetFragment.smali not found")
 
+    # ========================================================================
+    # == Feature A1+: NEW — Zero UNPATCHED decorView 0cW.A0R calls ===========
+    # ========================================================================
+    # Root cause of status bar black strip (verified by reading REAL smali):
+    #   2ZS.smali has FOUR 0cW.A0R(decorView, color, hash) calls that paint the
+    #   decorView. A1 only patches ONE (in A01, anchor -0x92e8ab6). The other
+    #   THREE are in methods A0A and A0B, with different anchors:
+    #     - A0A line 695: anchor 0x7ec86fbb, color reg v2
+    #     - A0B ~line 993: anchor -0x1377a806, color reg v4
+    #     - A0B ~line 1020: anchor 0xbc91124, color reg v4
+    #   With A6 edge-to-edge ON, the decorView IS drawn behind the status bar.
+    #   These 3 unpatched calls paint it BLACK -> status bar shows black.
+    # Fix: zero the color register before each call (same pattern as A1).
+    # ========================================================================
+    print("\n-- Feature A1+: zero unpatched decorView backgrounds (NEW) --")
+
+    # A1b: 2ZS.A0A — zero v2 before 0cW.A0R (anchor 0x7ec86fbb)
+    patch_text(zs,
+        '    const v0, 0x7ec86fbb\n\n    invoke-static {v1, v2, v0}, LX/0cW;->A0R(Landroid/view/View;II)V',
+        '    const v0, 0x7ec86fbb\n\n'
+        '    # InstaTrueReelStatusBar: transparent decorView (A0A)\n'
+        '    const/4 v2, 0x0\n\n'
+        '    invoke-static {v1, v2, v0}, LX/0cW;->A0R(Landroid/view/View;II)V',
+        'A1b-decorView-A0A')
+
+    # A1c: 2ZS.A0B — zero v4 before 0cW.A0R (anchor -0x1377a806)
+    patch_text(zs,
+        '    const v0, -0x1377a806\n\n    invoke-static {v3, v4, v0}, LX/0cW;->A0R(Landroid/view/View;II)V',
+        '    const v0, -0x1377a806\n\n'
+        '    # InstaTrueReelStatusBar: transparent decorView (A0B-1)\n'
+        '    const/4 v4, 0x0\n\n'
+        '    invoke-static {v3, v4, v0}, LX/0cW;->A0R(Landroid/view/View;II)V',
+        'A1c-decorView-A0B-1')
+
+    # A1d: 2ZS.A0B — zero v4 before 0cW.A0R (anchor 0xbc91124)
+    patch_text(zs,
+        '    const v0, 0xbc91124\n\n    invoke-static {v3, v4, v0}, LX/0cW;->A0R(Landroid/view/View;II)V',
+        '    const v0, 0xbc91124\n\n'
+        '    # InstaTrueReelStatusBar: transparent decorView (A0B-2)\n'
+        '    const/4 v4, 0x0\n\n'
+        '    invoke-static {v3, v4, v0}, LX/0cW;->A0R(Landroid/view/View;II)V',
+        'A1d-decorView-A0B-2')
+
+    # ========================================================================
+    # == Feature CS2: NEW — Force transparent nav bar in 1fI.A04 =============
+    # ========================================================================
+    # Root cause of comments bar black strip (verified by reading REAL smali):
+    #   1fI.smali A04(Activity, int) is the nav bar color setter. It calls
+    #   window.setNavigationBarColor(p1) at line 416. But there's NO patch
+    #   forcing p1=0 here (unlike 1fC.A04 which A5 patches for status bar).
+    #   So when 2ZS.A01 or BottomSheetFragment.A05 -> 3lH.A0R -> 1fI.A04 is
+    #   called with a BLACK color, the nav bar stays BLACK.
+    # Fix: force p1=0 at method entry (exact analog of A5 for status bar).
+    # ========================================================================
+    print("\n-- Feature CS2: force transparent nav bar in 1fI.A04 (NEW) --")
+
+    fi = find_smali(decoded, '1fI.smali')
+    patch_text(fi,
+        '.method public static final A04(Landroid/app/Activity;I)V\n    .locals 4\n\n    const/4 v0, 0x0\n\n    invoke-static {p0, v0}, LX/3l9;->A0U(Ljava/lang/Object;I)V',
+        '.method public static final A04(Landroid/app/Activity;I)V\n    .locals 4\n\n'
+        '    # InstaTrueReelStatusBar: force transparent nav bar color\n'
+        '    const/4 p1, 0x0\n\n'
+        '    const/4 v0, 0x0\n\n'
+        '    invoke-static {p0, v0}, LX/3l9;->A0U(Ljava/lang/Object;I)V',
+        'CS2-force-transparent-navbar')
+
+    # ========================================================================
+    # == Feature CS3: NEW — Zero direct setNavigationBarColor in 2ZS.A01 =====
+    # ========================================================================
+    # Root cause: 2ZS.A01 line 267 has a DIRECT call:
+    #   invoke-virtual {v1, v3}, Landroid/view/Window;->setNavigationBarColor(I)V
+    # This BYPASSES 1fI.A04 entirely, so CS2 cannot catch it. v3 = BLACK.
+    # Fix: zero v3 before the direct call.
+    # ========================================================================
+    print("\n-- Feature CS3: zero direct setNavigationBarColor in 2ZS.A01 (NEW) --")
+
+    patch_text(zs,
+        '    :cond_a\n    invoke-virtual {v1, v3}, Landroid/view/Window;->setNavigationBarColor(I)V',
+        '    :cond_a\n'
+        '    # InstaTrueReelStatusBar: transparent nav bar (direct call)\n'
+        '    const/4 v3, 0x0\n\n'
+        '    invoke-virtual {v1, v3}, Landroid/view/Window;->setNavigationBarColor(I)V',
+        'CS3-direct-navbar-transparent')
+
     # == Feature D: TikTok-style horizontal fullscreen ======================
     print("\n-- Feature D: TikTok-style horizontal fullscreen --")
     vbp = find_smali(decoded, 'VBP.smali')
