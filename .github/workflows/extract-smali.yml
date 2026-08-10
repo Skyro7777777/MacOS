@@ -36,6 +36,7 @@ jobs:
 
       - name: Extract target smali files + grep results
         run: |
+          set +e
           mkdir -p extraction/smali-files extraction/greps
 
           # ── 1. Extract specific smali files by name (preserve relative path) ──
@@ -51,8 +52,8 @@ jobs:
 
           # ── 2. Find ALL files containing setNavigationBarColor and extract them ──
           echo "=== Finding files with setNavigationBarColor ==="
-          grep -rl "setNavigationBarColor" decoded/smali*/ > extraction/greps/files-with-setNavigationBarColor.txt
-          cat extraction/greps/files-with-setNavigationBarColor.txt
+          grep -rl "setNavigationBarColor" decoded/smali*/ > extraction/greps/files-with-setNavigationBarColor.txt || true
+          cat extraction/greps/files-with-setNavigationBarColor.txt || true
           while read f; do
             rel=$(echo "$f" | sed 's|decoded/||')
             mkdir -p "extraction/smali-files/$(dirname "$rel")"
@@ -62,8 +63,8 @@ jobs:
 
           # ── 3. Find the class that DEFINES A0R(I)V (the navigator) and extract it ──
           echo "=== Finding definers of A0R(I)V ==="
-          grep -rln '\.method.*A0R(I)V' decoded/smali*/ > extraction/greps/A0R-definers.txt
-          cat extraction/greps/A0R-definers.txt
+          grep -rln '\.method.*A0R(I)V' decoded/smali*/ > extraction/greps/A0R-definers.txt || true
+          cat extraction/greps/A0R-definers.txt || true
           while read f; do
             rel=$(echo "$f" | sed 's|decoded/||')
             mkdir -p "extraction/smali-files/$(dirname "$rel")"
@@ -73,8 +74,8 @@ jobs:
 
           # ── 4. Find ALL files containing setOnApplyWindowInsetsListener ──
           echo "=== Finding files with setOnApplyWindowInsetsListener ==="
-          grep -rl "setOnApplyWindowInsetsListener" decoded/smali*/ > extraction/greps/files-with-setOnApplyWindowInsetsListener.txt
-          cat extraction/greps/files-with-setOnApplyWindowInsetsListener.txt
+          grep -rl "setOnApplyWindowInsetsListener" decoded/smali*/ > extraction/greps/files-with-setOnApplyWindowInsetsListener.txt || true
+          cat extraction/greps/files-with-setOnApplyWindowInsetsListener.txt || true
           while read f; do
             rel=$(echo "$f" | sed 's|decoded/||')
             mkdir -p "extraction/smali-files/$(dirname "$rel")"
@@ -85,28 +86,28 @@ jobs:
           echo "=== Running contextual greps ==="
 
           # setNavigationBarColor — ALL occurrences with 5 lines context
-          grep -rn -C 5 "setNavigationBarColor" decoded/smali*/ > extraction/greps/setNavigationBarColor-context.txt 2>/dev/null
+          grep -rn -C 5 "setNavigationBarColor" decoded/smali*/ > extraction/greps/setNavigationBarColor-context.txt 2>/dev/null || true
 
           # setNavigationBarContrastEnforced
-          grep -rn -C 3 "setNavigationBarContrastEnforced" decoded/smali*/ > extraction/greps/setNavigationBarContrastEnforced-context.txt 2>/dev/null
+          grep -rn -C 3 "setNavigationBarContrastEnforced" decoded/smali*/ > extraction/greps/setNavigationBarContrastEnforced-context.txt 2>/dev/null || true
 
           # ALL callers of A0R(I)V (invoke-virtual or invoke-interface)
-          grep -rn '->A0R(I)V' decoded/smali*/ > extraction/greps/A0R-all-callers.txt 2>/dev/null
+          grep -rn '->A0R(I)V' decoded/smali*/ > extraction/greps/A0R-all-callers.txt 2>/dev/null || true
 
           # Who calls BottomSheetFragment A05 (the nav bar color setter method)
-          grep -rn 'BottomSheetFragment;->A05' decoded/smali*/ > extraction/greps/callers-of-BSF-A05.txt 2>/dev/null
+          grep -rn 'BottomSheetFragment;->A05' decoded/smali*/ > extraction/greps/callers-of-BSF-A05.txt 2>/dev/null || true
 
           # bottomSheetContainer references
-          grep -rn 'bottomSheetContainer' decoded/smali*/ > extraction/greps/bottomSheetContainer-refs.txt 2>/dev/null
+          grep -rn 'bottomSheetContainer' decoded/smali*/ > extraction/greps/bottomSheetContainer-refs.txt 2>/dev/null || true
 
           # CommentListBottomsheet references (to trace the comments flow)
-          grep -rn 'CommentListBottomsheet\|C54625Krc\|C86682YfD' decoded/smali*/ > extraction/greps/comment-fragment-refs.txt 2>/dev/null
+          grep -rn 'CommentListBottomsheet\|C54625Krc\|C86682YfD' decoded/smali*/ > extraction/greps/comment-fragment-refs.txt 2>/dev/null || true
 
           # setStatusBarColor — for reference
-          grep -rn -C 3 "setStatusBarColor" decoded/smali*/ > extraction/greps/setStatusBarColor-context.txt 2>/dev/null
+          grep -rn -C 3 "setStatusBarColor" decoded/smali*/ > extraction/greps/setStatusBarColor-context.txt 2>/dev/null || true
 
           # fitsSystemWindows in smali
-          grep -rn 'fitsSystemWindows\|setFitsSystemWindows' decoded/smali*/ > extraction/greps/fitsSystemWindows-refs.txt 2>/dev/null
+          grep -rn 'fitsSystemWindows\|setFitsSystemWindows' decoded/smali*/ > extraction/greps/fitsSystemWindows-refs.txt 2>/dev/null || true
 
           # List all method definitions in BottomSheetFragment.smali (to verify A05 exists)
           BSF=$(find decoded/smali* -name "BottomSheetFragment.smali" | head -1)
