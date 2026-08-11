@@ -501,11 +501,14 @@ def main():
         # CS6-3: comment_composer_text_parent (the GRAY BOX parent view)
         # The gray box background is on the PARENT of the EditText, not the EditText itself.
         # Found at Krc.smali ~line 2423: findViewById(0x7f0b0d79) -> v31
+        # NOTE: v31 > 15, so we must use move-object/from16 to copy to a low register
+        # before invoke-virtual (which only accepts v0-v15).
         old3 = '    const v2, 0x7f0b0d79\n\n    invoke-virtual {v5, v2}, Landroid/view/View;->findViewById(I)Landroid/view/View;\n\n    move-result-object v31\n\n    const v2, 0x7f0b2065'
         new3 = '    const v2, 0x7f0b0d79\n\n    invoke-virtual {v5, v2}, Landroid/view/View;->findViewById(I)Landroid/view/View;\n\n    move-result-object v31\n\n'
         new3 += '    # InstaTrueReelStatusBar: transparent comment_composer_text_parent\n'
-        new3 += '    const/4 v2, 0x0\n'
-        new3 += '    invoke-virtual {v31, v2}, Landroid/view/View;->setBackgroundColor(I)V\n\n'
+        new3 += '    move-object/from16 v2, v31\n'
+        new3 += '    const/4 v0, 0x0\n'
+        new3 += '    invoke-virtual {v2, v0}, Landroid/view/View;->setBackgroundColor(I)V\n\n'
         new3 += '    const v2, 0x7f0b2065'
         if old3 in c:
             c = c.replace(old3, new3, 1)
