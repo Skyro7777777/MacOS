@@ -522,6 +522,43 @@ def main():
     else:
         print("  X CS6: Krc.smali not found")
 
+    # ========================================================================
+    # == Feature AR: NEW — ArchiveReelFragment strip + fitsSystemWindows =====
+    # ========================================================================
+    # ROOT CAUSE (verified from REAL smali by subagent 10-a):
+    #   ArchiveReelFragment (reels opened from HISTORY) does NOT use 9b7 or 2ZS.
+    #   It paints the strip DIRECTLY via:
+    #     0bF.A0O(context) -> resolves igds_color_primary_background (themed)
+    #     context.getColor(resolvedAttr) -> gets the actual color int
+    #     0cW.A0R(view, color, -0x5ae831af) -> view.setBackgroundColor(color)
+    #   This is why E1/E2 (9b7 patches) didn't fix the archive reel path.
+    #   Also: view.setFitsSystemWindows(true) at line 4933 creates padding
+    #   that makes the strip visible behind the status bar.
+    # Fix: Zero v4 (color) before 0cW.A0R, and zero v2 (boolean) before
+    # setFitsSystemWindows.
+    # ========================================================================
+    print("\n-- Feature AR: ArchiveReelFragment strip transparent (NEW) --")
+
+    arf = find_smali(decoded, 'ArchiveReelFragment.smali')
+
+    # AR1: Zero v4 (color) before 0cW.A0R in ArchiveReelFragment
+    patch_text(arf,
+        '    const v3, -0x5ae831af\n\n    invoke-static {v1, v4, v3}, LX/0cW;->A0R(Landroid/view/View;II)V',
+        '    const v3, -0x5ae831af\n\n'
+        '    # InstaTrueReelStatusBar: transparent archive reel strip\n'
+        '    const/4 v4, 0x0\n\n'
+        '    invoke-static {v1, v4, v3}, LX/0cW;->A0R(Landroid/view/View;II)V',
+        'AR1-archive-strip-transparent')
+
+    # AR2: Zero v2 (boolean) before setFitsSystemWindows -> false
+    # This makes the view NOT pad below the status bar -> content extends under it
+    patch_text(arf,
+        '    invoke-virtual {v1, v2}, Landroid/view/View;->setFitsSystemWindows(Z)V',
+        '    # InstaTrueReelStatusBar: disable fitsSystemWindows\n'
+        '    const/4 v2, 0x0\n\n'
+        '    invoke-virtual {v1, v2}, Landroid/view/View;->setFitsSystemWindows(Z)V',
+        'AR2-archive-fitsSystemWindows-false')
+
     # == Feature D: TikTok-style horizontal fullscreen ======================
     print("\n-- Feature D: TikTok-style horizontal fullscreen --")
     vbp = find_smali(decoded, 'VBP.smali')
