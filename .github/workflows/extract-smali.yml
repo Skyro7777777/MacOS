@@ -41,7 +41,7 @@ jobs:
 
           # ── 1. Extract specific smali files by name (preserve relative path) ──
           echo "=== Extracting target smali files ==="
-          for name in BottomSheetFragment G28 6BM 1fC 2ZS 0bQ EPN VBP 33g Krc YfD 9b7; do
+          for name in BottomSheetFragment G28 6BM 1fC 2ZS 0bQ EPN VBP 33g Krc YfD 9b7 ArchiveReelFragment ReelViewerFragment; do
             find decoded/smali* -name "${name}.smali" | while read f; do
               rel=$(echo "$f" | sed 's|decoded/||')
               mkdir -p "extraction/smali-files/$(dirname "$rel")"
@@ -112,6 +112,14 @@ jobs:
             grep -n 'setBackgroundColor\|setBackground\|findViewById\|0cW;->A0R\|0cW;->A03' "$KRC" > extraction/greps/Krc-bg-calls.txt || true
             echo "=== Krc.smali bg/findViewById calls ==="
             cat extraction/greps/Krc-bg-calls.txt
+          fi
+
+          # ArchiveReelFragment specific greps
+          ARF=$(find decoded/smali* -name "ArchiveReelFragment.smali" | head -1)
+          if [ -n "$ARF" ]; then
+            grep -n 'setBackgroundColor\|0cW;->A0R\|setFitsSystemWindows\|A0O\|igds_color_primary_background\|setStatusBarColor\|setSystemUiVisibility' "$ARF" > extraction/greps/ArchiveReelFragment-calls.txt || true
+            echo "=== ArchiveReelFragment calls ==="
+            cat extraction/greps/ArchiveReelFragment-calls.txt
           fi
 
           # setStatusBarColor — for reference
