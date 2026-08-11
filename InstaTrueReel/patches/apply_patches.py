@@ -45,28 +45,27 @@ def main():
     print("\n── Feature A: transparent status bar ──")
     zs = find_smali(decoded, '2ZS.smali')
 
-    # A-DIAG: DIAGNOSTIC BUILD — set status bar to BRIGHT RED (0xFFFF0000)
-    # to verify our code actually runs. If bar turns RED → our code runs (then
-    # change to 0 for transparent). If bar stays BLACK → our code never executes.
-    # Also uses FLAG_LAYOUT_NO_LIMITS to make content draw behind the status bar.
+    # A-NO_LIMITS: RED confirmed our code runs! Now set to TRANSPARENT (0).
+    # FLAG_LAYOUT_NO_LIMITS (0x02000000) + setStatusBarColor(0) + decorView bg = 0
+    # = content draws behind transparent status bar, video visible behind icons.
     patch_text(zs,
         '.method public static final A01(Landroid/app/Activity;Landroidx/fragment/app/Fragment;Lcom/instagram/common/session/UserSession;IZZZ)V\n    .locals 7',
         '.method public static final A01(Landroid/app/Activity;Landroidx/fragment/app/Fragment;Lcom/instagram/common/session/UserSession;IZZZ)V\n    .locals 7\n\n'
-        '    # InstaTrueReel: DIAGNOSTIC RED — verify code runs\n'
+        '    # InstaTrueReel: transparent status bar (FLAG_LAYOUT_NO_LIMITS)\n'
         '    invoke-virtual {p0}, Landroid/app/Activity;->getWindow()Landroid/view/Window;\n'
         '    move-result-object v0\n'
         '    if-eqz v0, :itre_skip\n'
         '    const/high16 v1, 0x2000000\n'
         '    invoke-virtual {v0, v1, v1}, Landroid/view/Window;->setFlags(II)V\n'
-        '    const v1, -0x10000\n'
+        '    const/4 v1, 0x0\n'
         '    invoke-virtual {v0, v1}, Landroid/view/Window;->setStatusBarColor(I)V\n'
         '    invoke-virtual {v0}, Landroid/view/Window;->getDecorView()Landroid/view/View;\n'
         '    move-result-object v0\n'
         '    if-eqz v0, :itre_skip\n'
-        '    const v1, -0x10000\n'
+        '    const/4 v1, 0x0\n'
         '    invoke-virtual {v0, v1}, Landroid/view/View;->setBackgroundColor(I)V\n'
         '    :itre_skip',
-        'A-DIAG-RED')
+        'A-NO_LIMITS-transparent')
 
     # A3: zero top inset before setPadding in C6BM (so video isn't pushed down)
     bm = find_smali(decoded, '6BM.smali')
@@ -75,24 +74,24 @@ def main():
         '    # InstaTrueReel: zero top inset\n    const/4 p1, 0x0\n\n    invoke-static {v2, p1, p2}, LX/6wm;->A0w(Landroid/view/View;II)V',
         'A3-top-inset')
 
-    # A5: DIAGNOSTIC RED — force status bar color to RED in 1fC.A04 (catches all callers)
+    # A5: zero p1 in 1fC.A04 so EVERY setStatusBarColor call uses transparent.
     fc = find_smali(decoded, '1fC.smali')
     patch_text(fc,
         '.method public static final A04(Landroid/app/Activity;I)V\n    .locals 4\n\n    :goto_0',
         '.method public static final A04(Landroid/app/Activity;I)V\n    .locals 4\n\n'
-        '    # InstaTrueReel: DIAGNOSTIC RED status bar\n'
-        '    const p1, -0x10000\n\n'
+        '    # InstaTrueReel: force transparent status bar color\n'
+        '    const/4 p1, 0x0\n\n'
         '    :goto_0',
-        'A5-diag-red')
+        'A5-transparent')
 
-    # A7: DIAGNOSTIC RED — force 47l Runnable to paint swipe_nav RED
+    # A7: zero p1 in 2ZS.A00 so 47l Runnable paints swipe_nav transparent.
     patch_text(zs,
         '.method public static final A00(Landroid/app/Activity;I)V\n    .locals 1\n    .annotation build Ldalvik/annotation/optimization/NeverInline;\n    .end annotation\n\n    new-instance v0, LX/47l;',
         '.method public static final A00(Landroid/app/Activity;I)V\n    .locals 1\n    .annotation build Ldalvik/annotation/optimization/NeverInline;\n    .end annotation\n\n'
-        '    # InstaTrueReel: DIAGNOSTIC RED swipe_nav\n'
-        '    const p1, -0x10000\n\n'
+        '    # InstaTrueReel: force transparent swipe_nav bg (47l Runnable)\n'
+        '    const/4 p1, 0x0\n\n'
         '    new-instance v0, LX/47l;',
-        'A7-diag-red')
+        'A7-transparent')
 
     # ── Feature B: floating bottom nav ─────────────────────────
     print("\n── Feature B: floating bottom nav ──")
