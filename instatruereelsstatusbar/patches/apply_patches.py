@@ -391,6 +391,104 @@ def main():
         '    invoke-virtual {v1, v3}, Landroid/view/Window;->setNavigationBarColor(I)V',
         'CS3-direct-navbar-transparent')
 
+    # ========================================================================
+    # == Feature E: NEW — Patch 9b7 color manager to return transparent ======
+    # ========================================================================
+    # ROOT CAUSE (verified from REAL smali by subagent 9-a):
+    #   9b7.smali is the Reels color manager. A00() returns DARK background
+    #   color, A01() returns LIGHT background color (white on light theme).
+    #   These are used by 5 0cW.A0R calls in 9Wz.smali (Reels viewer) to paint:
+    #     - 0x7f0b35ae (root background view) — THE STRIP behind status bar
+    #     - 0x7f0b4294 (clipsTopOfFeedContainer)
+    #     - 0x7f0b0c43 (clips pager holder — parent of the video)
+    #   The strip appears WHITE on light-themed phones because A01() returns
+    #   white. Previous A1/A1b/c/d patches zeroed decorView backgrounds in
+    #   2ZS.smali, but the visible strip comes from 9Wz.smali views painted
+    #   by 9b7 — which sit ON TOP of the decorView.
+    # Fix: Patch A00() and A01() to return 0 (Color.TRANSPARENT).
+    # ========================================================================
+    print("\n-- Feature E: patch 9b7 color manager -> transparent (NEW) --")
+
+    sb = find_smali(decoded, '9b7.smali')
+
+    # E1: 9b7.A00() -> return 0 (dark background -> transparent)
+    patch_text(sb,
+        '.method public final A00()I\n    .locals 1\n\n    iget-object v0, p0, LX/9b7;->A04:LX/JDl;',
+        '.method public final A00()I\n    .locals 1\n\n'
+        '    # InstaTrueReelStatusBar: transparent dark background\n'
+        '    const/4 v0, 0x0\n\n'
+        '    return v0\n\n'
+        '    iget-object v0, p0, LX/9b7;->A04:LX/JDl;',
+        'E1-9b7-A00-transparent')
+
+    # E2: 9b7.A01() -> return 0 (light background -> transparent)
+    patch_text(sb,
+        '.method public final A01()I\n    .locals 1\n\n    iget-object v0, p0, LX/9b7;->A07:LX/JDl;',
+        '.method public final A01()I\n    .locals 1\n\n'
+        '    # InstaTrueReelStatusBar: transparent light background\n'
+        '    const/4 v0, 0x0\n\n'
+        '    return v0\n\n'
+        '    iget-object v0, p0, LX/9b7;->A07:LX/JDl;',
+        'E2-9b7-A01-transparent')
+
+    # ========================================================================
+    # == Feature CS6: NEW — Transparent EditText (Add Comments... gray box) ==
+    # ========================================================================
+    # ROOT CAUSE: The "Add Comments..." gray box is a ComposerAutoCompleteTextView
+    # with a gray background set in XML layout. Since we decode with -r (no
+    # resource decode), we can't patch the XML. Instead, we insert
+    # setBackgroundColor(0) in Krc.smali right after the EditText is found.
+    #
+    # In Krc.smali onViewCreated, the EditText is found via 3l9.A04 (findViewById
+    # wrapper) and check-cast to ComposerAutoCompleteTextView. There are two
+    # branches:
+    #   - Multiline: resource ID 0x7f0b223b, check-cast at line ~2317
+    #   - Single-line: resource ID 0x7f0b223a, check-cast at line ~2338
+    # After each check-cast, 0cW.A0T is called. We insert setBackgroundColor(0)
+    # between the check-cast and the A0T call, using v1 (immediately overwritten).
+    # ========================================================================
+    print("\n-- Feature CS6: transparent EditText gray box (NEW) --")
+
+    krc = find_smali(decoded, 'Krc.smali')
+    if krc:
+        with open(krc) as f: c = f.read()
+        patched_count = 0
+
+        # CS6-1: Multiline EditText (after check-cast, before const v1, 0x3cfb9556)
+        old1 = '    check-cast v11, Lcom/instagram/ui/widget/textview/ComposerAutoCompleteTextView;\n\n    const v1, 0x3cfb9556\n\n    invoke-static {v11, v4, v1}, LX/0cW;->A0T(Landroid/view/View;II)V'
+        new1 = '    check-cast v11, Lcom/instagram/ui/widget/textview/ComposerAutoCompleteTextView;\n\n'
+        new1 += '    # InstaTrueReelStatusBar: transparent EditText (multiline)\n'
+        new1 += '    const/4 v1, 0x0\n'
+        new1 += '    invoke-virtual {v11, v1}, Landroid/view/View;->setBackgroundColor(I)V\n\n'
+        new1 += '    const v1, 0x3cfb9556\n\n'
+        new1 += '    invoke-static {v11, v4, v1}, LX/0cW;->A0T(Landroid/view/View;II)V'
+        if old1 in c:
+            c = c.replace(old1, new1, 1)
+            patched_count += 1
+            print(f"  + CS6-1-edittext-multiline: applied")
+        else:
+            print(f"  ~ CS6-1-edittext-multiline: pattern not found")
+
+        # CS6-2: Single-line EditText (after check-cast, before const v1, 0x2b6b9c9)
+        old2 = '    check-cast v11, Lcom/instagram/ui/widget/textview/ComposerAutoCompleteTextView;\n\n    const v1, 0x2b6b9c9\n\n    invoke-static {v11, v4, v1}, LX/0cW;->A0T(Landroid/view/View;II)V'
+        new2 = '    check-cast v11, Lcom/instagram/ui/widget/textview/ComposerAutoCompleteTextView;\n\n'
+        new2 += '    # InstaTrueReelStatusBar: transparent EditText (single-line)\n'
+        new2 += '    const/4 v1, 0x0\n'
+        new2 += '    invoke-virtual {v11, v1}, Landroid/view/View;->setBackgroundColor(I)V\n\n'
+        new2 += '    const v1, 0x2b6b9c9\n\n'
+        new2 += '    invoke-static {v11, v4, v1}, LX/0cW;->A0T(Landroid/view/View;II)V'
+        if old2 in c:
+            c = c.replace(old2, new2, 1)
+            patched_count += 1
+            print(f"  + CS6-2-edittext-singleline: applied")
+        else:
+            print(f"  ~ CS6-2-edittext-singleline: pattern not found")
+
+        if patched_count > 0:
+            with open(krc, 'w') as f: f.write(c)
+    else:
+        print("  X CS6: Krc.smali not found")
+
     # == Feature D: TikTok-style horizontal fullscreen ======================
     print("\n-- Feature D: TikTok-style horizontal fullscreen --")
     vbp = find_smali(decoded, 'VBP.smali')
