@@ -226,11 +226,11 @@ def main():
                         indent = line[:len(line)-len(line.lstrip())]
                         already = any('InstaTrueReelStatusBar' in lines[k] for k in range(max(0, i-3), i))
                         if not already:
-                            lines[i] = f'{indent}# InstaTrueReelStatusBar: translucent panel\n{indent}const {color_reg}, -0x34000000    # 0xCC000000\n{line}'
+                            lines[i] = f'{indent}# InstaTrueReelStatusBar: transparent panel (was 0xCC000000)\n{indent}const {color_reg}, 0x0    # 0x0 = transparent\n{line}'
                             patched += 1
         if patched:
             with open(bsr, 'w') as f: f.write('\n'.join(lines))
-        print(f"  {'+' if patched else '~'} C2-sheet-panel: {patched} setColorFilter(s) patched")
+        print(f"  {'+' if patched else '~'} C2-sheet-panel: {patched} setColorFilter(s) -> transparent")
     else:
         print("  X C2: BottomSheetFragment.smali not found")
 
@@ -431,6 +431,20 @@ def main():
         '    iget-object v0, p0, LX/9b7;->A07:LX/JDl;',
         'E2-9b7-A01-transparent')
 
+    # E3: 9b7.A05() -> return FALSE (force 2ZS.A01 to execute, triggering A1/A5/A6)
+    # ROOT CAUSE: When A05()==true, 2ZS.A03->A01 is SKIPPED entirely, meaning
+    # A1 (decorView transparent), A5 (status bar transparent), A6 (edge-to-edge)
+    # NEVER EXECUTE. The status bar color then comes from the theme XML.
+    # Forcing A05()=false makes 2ZS.A01 run, applying all our patches.
+    patch_text(sb,
+        '.method public final A05()Z\n    .locals 1\n    .annotation build Ldalvik/annotation/optimization/NeverInline;\n    .end annotation\n\n    iget-object v0, p0, LX/9b7;->A08:LX/JDl;',
+        '.method public final A05()Z\n    .locals 1\n    .annotation build Ldalvik/annotation/optimization/NeverInline;\n    .end annotation\n\n'
+        '    # InstaTrueReelStatusBar: force false so 2ZS.A01 (A1/A5/A6) executes\n'
+        '    const/4 v0, 0x0\n\n'
+        '    return v0\n\n'
+        '    iget-object v0, p0, LX/9b7;->A08:LX/JDl;',
+        'E3-9b7-A05-force-false')
+
     # ========================================================================
     # == Feature CS6: NEW — Transparent EditText (Add Comments... gray box) ==
     # ========================================================================
@@ -483,6 +497,22 @@ def main():
             print(f"  + CS6-2-edittext-singleline: applied")
         else:
             print(f"  ~ CS6-2-edittext-singleline: pattern not found")
+
+        # CS6-3: comment_composer_text_parent (the GRAY BOX parent view)
+        # The gray box background is on the PARENT of the EditText, not the EditText itself.
+        # Found at Krc.smali ~line 2423: findViewById(0x7f0b0d79) -> v31
+        old3 = '    const v2, 0x7f0b0d79\n\n    invoke-virtual {v5, v2}, Landroid/view/View;->findViewById(I)Landroid/view/View;\n\n    move-result-object v31\n\n    const v2, 0x7f0b2065'
+        new3 = '    const v2, 0x7f0b0d79\n\n    invoke-virtual {v5, v2}, Landroid/view/View;->findViewById(I)Landroid/view/View;\n\n    move-result-object v31\n\n'
+        new3 += '    # InstaTrueReelStatusBar: transparent comment_composer_text_parent\n'
+        new3 += '    const/4 v2, 0x0\n'
+        new3 += '    invoke-virtual {v31, v2}, Landroid/view/View;->setBackgroundColor(I)V\n\n'
+        new3 += '    const v2, 0x7f0b2065'
+        if old3 in c:
+            c = c.replace(old3, new3, 1)
+            patched_count += 1
+            print(f"  + CS6-3-text-parent: applied")
+        else:
+            print(f"  ~ CS6-3-text-parent: pattern not found")
 
         if patched_count > 0:
             with open(krc, 'w') as f: f.write(c)
