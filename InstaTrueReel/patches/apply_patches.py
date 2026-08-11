@@ -45,63 +45,42 @@ def main():
     print("\n── Feature A: transparent status bar ──")
     zs = find_smali(decoded, '2ZS.smali')
 
-    # A1: zero decorView background (v3→0 before A0R)
+    # A-NO_LIMITS: The simplest, most reliable technique (from web research).
+    # FLAG_LAYOUT_NO_LIMITS (0x02000000) makes the window extend behind ALL system
+    # bars (status + nav). Content draws behind them. API 1+ — works on Android 10.
+    # This is THE technique recommended by StackOverflow, Android docs, and every
+    # "transparent status bar" guide. No need for setStatusBarColor, setSystemUiVisibility,
+    # setDecorFitsSystemWindows, etc.
+    #
+    # We also zero the decorView background (theme sets it BLACK) so the video shows
+    # through the now-transparent status bar instead of the black windowBackground.
     patch_text(zs,
-        '    const v0, -0x92e8ab6\n\n    invoke-static {v1, v3, v0}, LX/0cW;->A0R(Landroid/view/View;II)V',
-        '    const v0, -0x92e8ab6\n\n    # InstaTrueReel: decorView transparent\n    const/4 v3, 0x0\n\n    invoke-static {v1, v3, v0}, LX/0cW;->A0R(Landroid/view/View;II)V',
-        'A1-decorView')
+        '.method public static final A01(Landroid/app/Activity;Landroidx/fragment/app/Fragment;Lcom/instagram/common/session/UserSession;IZZZ)V\n    .locals 7',
+        '.method public static final A01(Landroid/app/Activity;Landroidx/fragment/app/Fragment;Lcom/instagram/common/session/UserSession;IZZZ)V\n    .locals 7\n\n'
+        '    # InstaTrueReel: FLAG_LAYOUT_NO_LIMITS — content behind status bar\n'
+        '    invoke-virtual {p0}, Landroid/app/Activity;->getWindow()Landroid/view/Window;\n'
+        '    move-result-object v0\n'
+        '    if-eqz v0, :itre_skip\n'
+        '    const/high16 v1, 0x2000000\n'
+        '    invoke-virtual {v0, v1, v1}, Landroid/view/Window;->setFlags(II)V\n'
+        '    const/4 v1, 0x0\n'
+        '    invoke-virtual {v0, v1}, Landroid/view/Window;->setStatusBarColor(I)V\n'
+        '    invoke-virtual {v0}, Landroid/view/Window;->getDecorView()Landroid/view/View;\n'
+        '    move-result-object v0\n'
+        '    if-eqz v0, :itre_skip\n'
+        '    const/4 v1, 0x0\n'
+        '    invoke-virtual {v0, v1}, Landroid/view/View;->setBackgroundColor(I)V\n'
+        '    :itre_skip',
+        'A-NO_LIMITS')
 
-    # A2: zero android.R.id.content background (p2→0 before A0R)
-    patch_text(zs,
-        '    const v0, -0x7ff859fd\n\n    invoke-static {p0, p2, v0}, LX/0cW;->A0R(Landroid/view/View;II)V',
-        '    const v0, -0x7ff859fd\n\n    # InstaTrueReel: content transparent\n    const/4 p2, 0x0\n\n    invoke-static {p0, p2, v0}, LX/0cW;->A0R(Landroid/view/View;II)V',
-        'A2-content')
-
-    # A3: zero top inset before setPadding in C6BM (pswitch_3 → cond_3 branch)
+    # A3: zero top inset before setPadding in C6BM (so video isn't pushed down)
     bm = find_smali(decoded, '6BM.smali')
     patch_text(bm,
         '    invoke-static {v2, p1, p2}, LX/6wm;->A0w(Landroid/view/View;II)V',
         '    # InstaTrueReel: zero top inset\n    const/4 p1, 0x0\n\n    invoke-static {v2, p1, p2}, LX/6wm;->A0w(Landroid/view/View;II)V',
         'A3-top-inset')
 
-    # A6: edge-to-edge using LEGACY API (works on Android 10/API 29+).
-    # v5 used 2Ib.A01 which calls setDecorFitsSystemWindows (API 30+) → crash on Android 10.
-    # This replacement uses only API 16+/21+ calls:
-    # - clearFlags(FLAG_TRANSLUCENT_STATUS|FLAG_TRANSLUCENT_NAVIGATION)
-    # - addFlags(FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
-    # - setStatusBarColor(0) + setNavigationBarColor(0)
-    # - decorView.setSystemUiVisibility(LAYOUT_FULLSCREEN|LAYOUT_STABLE)
-    # - decorView.setBackgroundColor(0) ← KEY: makes decorView transparent so video shows
-    #   through the transparent status bar (theme sets windowBackground=black, so without
-    #   this the black shows through even with statusBarColor=0)
-    patch_text(zs,
-        '.method public static final A01(Landroid/app/Activity;Landroidx/fragment/app/Fragment;Lcom/instagram/common/session/UserSession;IZZZ)V\n    .locals 7',
-        '.method public static final A01(Landroid/app/Activity;Landroidx/fragment/app/Fragment;Lcom/instagram/common/session/UserSession;IZZZ)V\n    .locals 7\n\n'
-        '    # InstaTrueReel: edge-to-edge (legacy API, Android 10+)\n'
-        '    invoke-virtual {p0}, Landroid/app/Activity;->getWindow()Landroid/view/Window;\n'
-        '    move-result-object v0\n'
-        '    if-eqz v0, :itre_skip\n'
-        '    const/high16 v1, 0xc000000\n'
-        '    invoke-virtual {v0, v1}, Landroid/view/Window;->clearFlags(I)V\n'
-        '    const/high16 v1, -0x80000000\n'
-        '    invoke-virtual {v0, v1}, Landroid/view/Window;->addFlags(I)V\n'
-        '    const/4 v1, 0x0\n'
-        '    invoke-virtual {v0, v1}, Landroid/view/Window;->setStatusBarColor(I)V\n'
-        '    invoke-virtual {v0, v1}, Landroid/view/Window;->setNavigationBarColor(I)V\n'
-        '    invoke-virtual {v0}, Landroid/view/Window;->getDecorView()Landroid/view/View;\n'
-        '    move-result-object v0\n'
-        '    if-eqz v0, :itre_skip\n'
-        '    const/16 v1, 0x500\n'
-        '    invoke-virtual {v0, v1}, Landroid/view/View;->setSystemUiVisibility(I)V\n'
-        '    const/4 v1, 0x0\n'
-        '    invoke-virtual {v0, v1}, Landroid/view/View;->setBackgroundColor(I)V\n'
-        '    :itre_skip',
-        'A6-edge-to-edge-legacy')
-
     # A5: zero p1 in 1fC.A04 so EVERY setStatusBarColor call uses transparent.
-    # A6 sets transparent at the START of 2ZS.A01, but 2ZS.A01:294 calls
-    # 1fC.A04(BLACK) afterward. A5 catches that call (and all others).
-    # A5+A6 together: A6 makes window edge-to-edge, A5 forces all color calls to 0.
     fc = find_smali(decoded, '1fC.smali')
     patch_text(fc,
         '.method public static final A04(Landroid/app/Activity;I)V\n    .locals 4\n\n    :goto_0',
@@ -111,13 +90,7 @@ def main():
         '    :goto_0',
         'A5-force-transparent-statusbar')
 
-    # A7: THE MISSING FIX — zero p1 in 2ZS.A00 so 47l Runnable gets transparent color.
-    # 2ZS.A00 creates a 47l Runnable with the color arg, which paints
-    # swipe_navigation_container (the top-level FrameLayout) with setBackgroundColor.
-    # This is the LAST WRITER — it runs AFTER A6 and overrides everything.
-    # v6 accidentally removed A1fix (which zeroed v3 feeding into A00). A7 catches
-    # it at the method level: zero p1 at the start of A00, so 47l ALWAYS gets 0.
-    # This is analogous to A5 (zero p1 in 1fC.A04).
+    # A7: zero p1 in 2ZS.A00 so 47l Runnable paints swipe_nav transparent.
     patch_text(zs,
         '.method public static final A00(Landroid/app/Activity;I)V\n    .locals 1\n    .annotation build Ldalvik/annotation/optimization/NeverInline;\n    .end annotation\n\n    new-instance v0, LX/47l;',
         '.method public static final A00(Landroid/app/Activity;I)V\n    .locals 1\n    .annotation build Ldalvik/annotation/optimization/NeverInline;\n    .end annotation\n\n'
