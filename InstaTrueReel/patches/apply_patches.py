@@ -45,13 +45,16 @@ def main():
     print("\n── Feature A: transparent status bar ──")
     zs = find_smali(decoded, '2ZS.smali')
 
-    # A-NO_LIMITS: RED confirmed our code runs! Now set to TRANSPARENT (0).
-    # FLAG_LAYOUT_NO_LIMITS (0x02000000) + setStatusBarColor(0) + decorView bg = 0
-    # = content draws behind transparent status bar, video visible behind icons.
+    # A-NO_LIMITS: The KEY fix. RED proved our code runs. Transparent (0) showed
+    # black/white because the WINDOW BACKGROUND (from theme = igds_color_primary_background)
+    # was showing through the transparent status bar. Now we ALSO call
+    # window.setBackgroundDrawable(null) to remove the theme's window background.
+    # With FLAG_LAYOUT_NO_LIMITS + setStatusBarColor(0) + null window background,
+    # the video content draws behind the transparent status bar — TikTok style.
     patch_text(zs,
         '.method public static final A01(Landroid/app/Activity;Landroidx/fragment/app/Fragment;Lcom/instagram/common/session/UserSession;IZZZ)V\n    .locals 7',
         '.method public static final A01(Landroid/app/Activity;Landroidx/fragment/app/Fragment;Lcom/instagram/common/session/UserSession;IZZZ)V\n    .locals 7\n\n'
-        '    # InstaTrueReel: transparent status bar (FLAG_LAYOUT_NO_LIMITS)\n'
+        '    # InstaTrueReel: transparent status bar + null window background\n'
         '    invoke-virtual {p0}, Landroid/app/Activity;->getWindow()Landroid/view/Window;\n'
         '    move-result-object v0\n'
         '    if-eqz v0, :itre_skip\n'
@@ -59,13 +62,14 @@ def main():
         '    invoke-virtual {v0, v1, v1}, Landroid/view/Window;->setFlags(II)V\n'
         '    const/4 v1, 0x0\n'
         '    invoke-virtual {v0, v1}, Landroid/view/Window;->setStatusBarColor(I)V\n'
+        '    invoke-virtual {v0, v1}, Landroid/view/Window;->setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V\n'
         '    invoke-virtual {v0}, Landroid/view/Window;->getDecorView()Landroid/view/View;\n'
         '    move-result-object v0\n'
         '    if-eqz v0, :itre_skip\n'
         '    const/4 v1, 0x0\n'
         '    invoke-virtual {v0, v1}, Landroid/view/View;->setBackgroundColor(I)V\n'
         '    :itre_skip',
-        'A-NO_LIMITS-transparent')
+        'A-NO_LIMITS-null-bg')
 
     # A3: zero top inset before setPadding in C6BM (so video isn't pushed down)
     bm = find_smali(decoded, '6BM.smali')
