@@ -1,0 +1,109 @@
+# InstaTrueReel — Living Plan & Debug Log
+
+## CURRENT STATE (2026-08-12, after v11 build)
+
+### What WORKS:
+- ✅ **Main bottom nav bar** is transparent (floating white icons over video)
+  - This was achieved in v2 with B1 (zero bottomMargin) + B2 (zero 0bQ.A04 bgcolor)
+  - Has NOT broken since — these patches are stable
+
+### What DOESN'T WORK:
+- ❌ **Status bar** — still shows black strip (dark mode) / white strip (light mode)
+- ❌ **Comment input bar** ("Add Comments..." that replaces main bar) — still black/gray
+
+### What I've tried for status bar (11 builds, ALL failed):
+1. v1-3: setStatusBarColor(0) — didn't work (content didn't draw behind bar)
+2. v4: A5 zero 1fC.A04 p1 — didn't work (deferred Choreographer overrode)
+3. v5: A6 call 2Ib.A01 — CRASHED (setDecorFitsSystemWindows is API 30+, user on Android 10)
+4. v6: A6 legacy API (clearFlags + setSystemUiVisibility + setBackgroundColor) — didn't work
+5. v7: A7 zero 2ZS.A00 p1 (47l Runnable) — didn't work
+6. v8: FLAG_LAYOUT_NO_LIMITS — didn't work
+7. v9: RED diagnostic — **STATUS BAR TURNED RED** (proved code runs!)
+8. v10: RED → transparent(0) — showed black/white (window background showing through)
+9. v11: window.setBackgroundDrawable(null) — **STILL shows black/white**
+
+### THE KEY INSIGHT I'M MISSING:
+The RED diagnostic (v9) proved:
+- Our code DOES execute
+- setStatusBarColor(RED) makes the bar RED
+- FLAG_LAYOUT_NO_LIMITS works (content draws behind)
+
+But transparent(0) shows black/white. This means:
+- setStatusBarColor(0) IS being set (transparent)
+- BUT something BEHIND the status bar is painted black/white
+- window.setBackgroundDrawable(null) should have fixed it — but DIDN'T
+- decorView.setBackgroundColor(0) should have fixed it — but DIDN'T
+
+## WHAT I'M COMPROMISING / NOT DOING:
+
+### 1. I'm not verifying what ACTUALLY happens at runtime
+I'm guessing what's behind the status bar. I should:
+- Do ANOTHER diagnostic: set window background to RED, decorView to RED,
+  status bar to RED, AND 47l to RED — ALL at once. If ALL are red, then
+  something ELSE is painting on top. If only some are red, we know which
+  layer is the problem.
+
+### 2. I'm not checking if setBackgroundDrawable(null) actually executes
+The smali for `setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V`
+takes an object parameter. I'm passing `v1` which is `0x0` (null int). But
+smali needs `const/4 v1, 0x0` for an object null reference, and the invoke
+must be `invoke-virtual {v0, v1}, ...->setBackgroundDrawable`. Let me verify
+this is correct — maybe the null isn't being passed properly.
+
+### 3. I'm not exploring the RIGHT code path
+Agent 7-a found that on Android 10, `3sA.A02()` returns FALSE (needs SDK 35+).
+So `2ZS.A08` returns 1 (OLD path). The old path goes to `:cond_5` which calls
+`2ZS.A00(activity, v3)`. Our A7 zeros p1 in A00. BUT — does A00 actually run?
+The RED test showed the status bar IS red, so our A-NO_LIMITS patch in A01
+runs. But maybe A00 runs AFTER and re-paints? No — A7 zeros A00's p1, so
+even if A00 runs, it gets 0.
+
+### 4. I haven't checked: is there a VIEW literally drawn ON TOP of the status bar?
+The RED test proved the STATUS BAR COLOR is red. But maybe there's a VIEW
+(a black/white rectangle) drawn on top of the status bar area, covering the red.
+This would explain why RED shows (the bar itself is red) but transparent shows
+black (the view on top is black). I need to find this view.
+
+### 5. I'm not using subagents anymore for the status bar
+I dispatched subagents for v7 but then stopped. I should dispatch a subagent
+specifically to find: "Is there a View overlay drawn on top of the status bar
+area in the Reels viewer?"
+
+## ACTION PLAN FOR NEXT BUILD:
+
+### Step 1: Full RED diagnostic (ALL layers red)
+Set ALL of these to RED simultaneously:
+- window.setStatusBarColor(RED)
+- window.setBackgroundDrawable(RED ColorDrawable) — not null, RED
+- decorView.setBackgroundColor(RED)
+- 1fC.A04 p1 = RED (catches all setStatusBarColor)
+- 2ZS.A00 p1 = RED (catches 47l swipe_nav painter)
+- 0bQ.A04 bgcolor = RED (catches main nav painter)
+
+If the ENTIRE screen is red → we control everything, change to transparent
+If only status bar is red but rest is black → a VIEW is on top, find it
+If nothing is red → build pipeline issue
+
+### Step 2: Find the overlay view (if Step 1 shows a view on top)
+Dispatch subagent to find any View that:
+- Has height = status_bar_height
+- Is positioned at the top of the screen
+- Has a black/white background
+- Is added in the Reels viewer layout
+
+### Step 3: For comment bar
+The comment input bar ("Add Comments...") is a DIFFERENT view from the comment
+sheet. Agent 5-c found it's `bottom_sheet_container` (0x7f0b06b2/0x7f0b06b3).
+B4 patches C6BM.pswitch_6 to setBackgroundColor(0) on these. But it's still
+black. The background might be set via XML layout (which we can't patch with
+-r decode). Need to find where it's set in code OR do a full resource decode
+for just that layout.
+
+## LESSONS LEARNED:
+1. The RED diagnostic was the most useful thing I did — it proved the code runs
+2. I should have done it at v3, not v9
+3. I keep guessing instead of verifying each layer
+4. I need to test ALL layers at once, not one at a time
+5. The main nav bar worked because B1+B2 were simple and correct from the start
+6. Status bar is complex because MULTIPLE layers are involved (window bg,
+   decorView bg, status bar color, view overlays)
