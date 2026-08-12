@@ -42,18 +42,22 @@ def main():
     print("=" * 60 + "\nInstaTrueReel — applying patches (v12: full decode + resource fixes)\n" + "=" * 60)
 
     # ── Pre-flight: fix Bloks layouts.xml (crash fix for full resource decode) ──
+    # Bloks entries have format="string" with L|HEX|LEN|HASH values. aapt can't
+    # compile these. Replace the L| value with a valid @layout/ reference so the
+    # entry compiles (the R.layout.* ID still exists; Bloks layouts are resolved
+    # at runtime, not via XML inflation).
     print("\n── Pre-flight: fix Bloks layouts.xml ──")
     layouts_files = glob.glob(os.path.join(decoded, 'res/values*/layouts.xml'))
     total_fixed = 0
     for layouts_xml in layouts_files:
         with open(layouts_xml) as f: c = f.read()
-        lines = c.split('\n')
-        kept = [l for l in lines if not ('L|' in l and '<item' in l)]
-        if len(kept) < len(lines):
-            with open(layouts_xml, 'w') as f: f.write('\n'.join(kept))
-            total_fixed += len(lines) - len(kept)
+        if 'L|' in c:
+            # Replace L|... values with @layout/abc_action_bar_title_item (a valid AppCompat layout)
+            c = re.sub(r'>L\|[^<]*<', '>@layout/abc_action_bar_title_item<', c)
+            with open(layouts_xml, 'w') as f: f.write(c)
+            total_fixed += 1
     if total_fixed:
-        print(f"  ✅ Removed {total_fixed} Bloks layout entries across {len(layouts_files)} files")
+        print(f"  ✅ Fixed Bloks entries in {total_fixed} layouts.xml files")
     else:
         print("  ✅ No Bloks entries found")
 
