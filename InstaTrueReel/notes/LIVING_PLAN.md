@@ -107,3 +107,83 @@ for just that layout.
 5. The main nav bar worked because B1+B2 were simple and correct from the start
 6. Status bar is complex because MULTIPLE layers are involved (window bg,
    decorView bg, status bar color, view overlays)
+
+---
+
+## 2026-08-18 — STEP 12 (fresh pass): real-smali root-cause + DIAGNOSTIC build
+
+### What this pass did differently
+- Read the ACTUAL smali (smali-extraction artifact 9026348046, ~580 KB) for
+  `X/2ZS.smali`, `X/1fC.smali`, `X/1fI.smali`, `X/6BM.smali`, `X/0bQ.smali`
+  instead of trusting the (suspect) prior notes for status/comment bar.
+- Confirmed the A1/A2/A3/A5/A7 patch patterns actually exist in the smali
+  (dry-run of `apply_diagnostic.py` against the real smali: all 6 Feature-A
+  patches + B2 applied cleanly).
+- Re-read `2ZS.A08` carefully: **CORRECTED the prior note.** `A08` returns
+  TRUE on Android 10 (it only returns FALSE on SDK35+ AND when view
+  `0x7f0b3f31` exists). So on Android 10 the :202 (decorView paint) and :204
+  →A05 (:410 content paint) code paths DO run. A1/A2 are NOT no-ops on
+  Android 10. (The prior "A08 returns FALSE on Android 10" claim was wrong.)
+
+### Two distinct root-cause bugs (confirmed from smali)
+1. **MAIN `apply_patches.py` bug:** `A-NO_LIMITS` sets `window bg = null` +
+   `decorView = 0` at the START of `2ZS.A01`, but the original A01 body then
+   RE-PAINTS decorView at :202 (`0cW.A0R(decorView, v3=themeColor, hash)`)
+   and content at :410 (via `2ZS.A05`). A1 (intercept :202 → v3=0) and A2
+   (intercept :410 → p2=0) are MISSING from the main script. → decorView &
+   content end up DARK (theme `#0c1014`). → black strip.
+2. **`instatruereelsstatusbar/apply_patches.py` bug:** HAS A1/A2 (so
+   decorView + content become transparent) BUT its A6 block never calls
+   `window.setBackgroundDrawable(null)`. → theme `windowBackground`
+   (`igds_color_primary_background = #ff0c1014`) shows through the
+   now-transparent decorView/content. → dark strip.
+
+### The complete fix (untested yet)
+A1 + A2 + `window.setBackgroundDrawable(null)` + A3 + A5 + A7 + B1 + B2.
+**BUT** even this may still show BLACK: if all bg layers are transparent and
+the video view does NOT extend into the status-bar region (inset/padding
+pushes it down) you see the bare window surface (black); OR the video DOES
+extend but a 9:16 video letterboxed into a ~20:9 screen leaves a black bar.
+
+### The DIAGNOSTIC build (this round) — `apply_diagnostic.py`
+Same as the complete fix, BUT `window bg = RED ColorDrawable (0xFFFF0000)`
+instead of null. ONE screenshot of a reel playing then pinpoints the case:
+
+| Status-bar strip color | Meaning | Next step |
+|---|---|---|
+| **RED** | A1/A2 applied (decorView+content transparent) + video does NOT reach the bar | Hunt & zero the inset/padding on the reels root (A3/6BM is the wrong target or insufficient); find the real `OnApplyWindowInsetsListener` / `fitsSystemWindows` |
+| **DARK (#0c1014, not red)** | A1/A2 patch patterns failed to match | Re-check smali patterns (dry-run already shows they DO match, so this outcome is unlikely) |
+| **BLACK (pure #000000)** | Video reaches the status-bar region but is black there (letterboxed 9:16 in taller screen, or a black overlay view) | Force-fill / center-crop (`setForceFillTextureScaling(true)`) OR hunt a black overlay view drawn on top |
+| **video shows edge-to-edge** | DONE | Switch window bg back to null, ship |
+
+### Build / artifact
+- Workflow: `.github/workflows/insta-diagnostic-build.yml`
+- Patch script: `InstaTrueReel/patches/apply_diagnostic.py`
+- Artifact name: `InstaTrueReel-diagnostic-apk`
+- Patches applied: A-DIAG (window RED) + A1 + A2 + A3 + A5 + A7 + B1 + B2.
+  Skipped C / D / CS1 (focused status-bar diagnostic; comment-bar fix is next round).
+
+### Open question still unresolved: what does `47l.run()` paint?
+`2ZS.A00` posts a `47l` Runnable with the color (A7 forces it to 0/transparent).
+The prior note calls 47l the "swipe_nav painter" (bottom) — if so it doesn't
+touch the status-bar region and the diagnostic colors persist there. If 47l
+also paints decorView/content, A7 (transparent) would make them transparent,
+revealing window RED below — still a valid (RED) signal. Either way the
+diagnostic gives usable data. `47l.smali` was NOT in the smali-extraction set;
+extract it next round if the diagnostic is inconclusive.
+
+### Comment bar (round 2, after status-bar data)
+The CS1 patch (transparent nav bar for bottom sheets via
+`BottomSheetFragment.A05 → A0R(0)`) reportedly failed. Likely causes to
+investigate next round, AFTER the status-bar diagnostic resolves:
+- `AbstractC109183lH.A0R(0)` may STILL early-return (the sentinel check
+  might be `i != 0` not `i == 255`; re-read `3lH.smali`).
+- The `G28` inset listener adds bottom padding = nav-bar-height to
+  `bottomSheetContainer` — even with a transparent nav bar, that padding gap
+  shows the window bg (now RED in diagnostic; if the comment-bar strip turns
+  RED → confirmed nav-bar-color path; fix = also zero the G28 bottom padding).
+
+### Process status
+- Diagnostic workflow will be triggered once committed.
+- Awaiting: user installs diagnostic APK, screenshots a reel, reports the
+  status-bar strip color. That single data point picks the next branch.
