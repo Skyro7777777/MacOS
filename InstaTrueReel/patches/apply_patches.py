@@ -39,57 +39,12 @@ def patch_text(filepath, old, new, label):
 
 def main():
     decoded = sys.argv[1] if len(sys.argv) > 1 else 'decoded'
-    print("=" * 60 + "\nInstaTrueReel — applying patches (v12: full decode + resource fixes)\n" + "=" * 60)
+    print("=" * 60 + "\nInstaTrueReel — applying patches (v13: -r decode, smali-only)\n" + "=" * 60)
 
-    # ── Pre-flight: fix Bloks layouts.xml (crash fix for full resource decode) ──
-    # Bloks entries have format="string" with L|HEX|LEN|HASH values. aapt can't
-    # compile these. Replace the L| value with a valid @layout/ reference so the
-    # entry compiles (the R.layout.* ID still exists; Bloks layouts are resolved
-    # at runtime, not via XML inflation).
-    print("\n── Pre-flight: fix Bloks layouts.xml ──")
-    layouts_files = glob.glob(os.path.join(decoded, 'res/values*/layouts.xml'))
-    total_fixed = 0
-    for layouts_xml in layouts_files:
-        with open(layouts_xml) as f: c = f.read()
-        if 'L|' in c:
-            # Replace L|... values with @layout/abc_action_bar_title_item (a valid AppCompat layout)
-            c = re.sub(r'>L\|[^<]*<', '>@layout/abc_action_bar_title_item<', c)
-            with open(layouts_xml, 'w') as f: f.write(c)
-            total_fixed += 1
-    if total_fixed:
-        print(f"  ✅ Fixed Bloks entries in {total_fixed} layouts.xml files")
-    else:
-        print("  ✅ No Bloks entries found")
-
-    # ── Pre-flight: patch styles.xml windowBackground → transparent ──
-    # THE ROOT CAUSE of the black/white status bar: the theme sets
-    # android:windowBackground = ?igds_color_primary_background (black/white).
-    # This shows through the transparent status bar. Setting it to transparent
-    # removes the window background entirely — video shows behind status bar.
-    print("\n── Pre-flight: patch windowBackground → transparent ──")
-    for styles_path in [os.path.join(decoded, 'res/values/styles.xml'),
-                        os.path.join(decoded, 'res/values-night/styles.xml')]:
-        if os.path.exists(styles_path):
-            with open(styles_path) as f: c = f.read()
-            old = '<item name="android:windowBackground">?igds_color_primary_background</item>'
-            new = '<item name="android:windowBackground">@android:color/transparent</item>'
-            cnt = c.count(old)
-            if cnt:
-                c = c.replace(old, new)
-                with open(styles_path, 'w') as f: f.write(c)
-                print(f"  ✅ {os.path.basename(os.path.dirname(styles_path))}/styles.xml: {cnt} windowBackground → transparent")
-            else:
-                print(f"  ✅ {os.path.basename(os.path.dirname(styles_path))}/styles.xml: already transparent or not found")
-
-    # ── Pre-flight: fix manifest attributes unknown to aapt ──
-    manifest = os.path.join(decoded, 'AndroidManifest.xml')
-    if os.path.exists(manifest):
-        with open(manifest) as f: c = f.read()
-        for attr in ['allowCrossUidActivitySwitchFromBelow', 'knownActivityEmbeddingCerts']:
-            if attr in c:
-                c = re.sub(r'\s*android:' + attr + r'="[^"]*"', '', c)
-                print(f"  ✅ manifest: removed android:{attr}")
-        with open(manifest, 'w') as f: f.write(c)
+    # NOTE: v12 tried full resource decode to patch styles.xml windowBackground.
+    # CRASHED: aapt reassigned R.id values → requireViewById failed → crash.
+    # v13: back to -r decode (preserves original IDs). windowBackground fixed
+    # via runtime smali: window.setBackgroundDrawable(null) in 2ZS.A01.
 
     # ── Feature A: transparent status bar ──────────────────────
     print("\n── Feature A: transparent status bar ──")

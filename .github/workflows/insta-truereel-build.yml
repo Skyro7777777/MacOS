@@ -33,17 +33,15 @@ jobs:
         run: |
           curl -sL -o uber-apk-signer.jar https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
 
-      - name: "Decode APK with apktool (FULL decode: smali + resources)"
+      - name: "Decode APK with apktool (smali only, -r preserves resource IDs)"
         run: |
           APK="Instagram-v435.0.0.37.76-patches-v3.8.0.apk"
-          echo "Decoding $APK (full decode with resources)..."
-          java -Xmx4g -jar apktool.jar d -f -o decoded "$APK" 2>&1 | tail -5
-          echo "=== smali_classes dirs ==="
-          ls decoded/ | grep smali | head -25
+          echo "Decoding $APK with -r (no resource decode — preserves R.id values)..."
+          java -Xmx4g -jar apktool.jar d -r -f -o decoded "$APK" 2>&1 | tail -5
           echo "=== total smali files ==="
           find decoded -name "*.smali" | wc -l
-          echo "=== res/ exists ==="
-          ls decoded/res/values/styles.xml && echo "styles.xml present" || echo "WARNING: no styles.xml"
+          echo "=== resources.arsc preserved ==="
+          ls decoded/resources.arsc && echo "resources.arsc present (original, IDs preserved)" || echo "WARNING: no resources.arsc"
 
       - name: Apply InstaTrueReel patches
         run: |
