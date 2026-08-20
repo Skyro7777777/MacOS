@@ -1,0 +1,39 @@
+**TikTok’s Horizontal Full Screen (Landscape) Feature**
+
+TikTok supports native **horizontal (landscape / 16:9) videos**. When a qualifying video appears in the For You or Following feed, a **“Full Screen”** button appears. Tapping it expands the video to true landscape orientation that fills the phone’s screen (users rotate the device). This is distinct from the normal vertical (9:16) feed experience.
+
+### UI Details (Viewer Side)
+
+**In the normal vertical feed:**
+- Horizontal videos appear letterboxed (black bars top/bottom) so they fit the vertical layout.
+- A clear **“Full Screen”** button/label is shown on or just below the video.
+- The rest of the standard TikTok UI (username, caption, like/comment/share/favorite buttons on the right, progress bar at bottom, etc.) remains visible.
+
+**After tapping Full Screen + rotating the phone:**
+- Video expands to fill the entire screen in landscape (true 16:9, no black bars).
+- UI becomes more immersive and cinema-like.
+- Standard interactions stay available: Like, Comment, Favorite, Share, Follow.
+- Playback controls include: progress scrubber, playback speed, and captions/subtitles.
+- Scrolling (up/down) continues to work and switches the feed to mostly/other horizontal videos only (a “horizontal feed” mode). Sideways (left/right) swipes do not navigate.
+- Exiting usually involves the back gesture/button or rotating back to portrait.
+
+The feature also works well on TikTok TV (big-screen optimization) and larger devices (tablets/foldables), where landscape orientation and clearer video feed are better supported.
+
+### Technical / Eligibility Requirements
+
+**For the Full Screen button to appear:**
+- Video must be **true landscape** (width > height, typically 16:9 aspect ratio).
+- No text, stickers, or elements placed in the margins/letterbox areas (text must stay strictly inside the video frame).
+- Preferred length: longer than 1 minute (up to the platform limit, commonly 10 minutes for these videos).
+- Original content that follows Community Guidelines.
+- Not lip-sync/random recordings, pure ads, or content from government/politician/political party accounts (in some reported criteria).
+
+**How creators enable it:**
+- Shoot or export the video already in landscape (do not force-rotate or heavily pad a vertical video).
+- Upload the 16:9 file directly.
+- Keep any on-screen text/captions inside the video boundaries (adding text outside the frame can disable the Full Screen option and force vertical treatment).
+- TikTok detects the aspect ratio and automatically adds the Full Screen button for eligible videos.
+
+Horizontal videos can receive algorithmic visibility boosts in some cases (especially longer ones). The feature started as a limited test around late 2022 and has since rolled out more widely, aligning TikTok closer to YouTube-style long-form viewing while keeping the core vertical feed intact.
+
+**Note:** Availability can still vary slightly by account age, region, or whether the video is viewed from the main feed vs. profile/search/comments. The button is most reliable when the video is discovered organically in the For You/Following feed.
