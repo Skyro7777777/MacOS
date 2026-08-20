@@ -1,0 +1,174 @@
+name: Extract Smali for Analysis
+
+on:
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repo (with LFS for the APK)
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Download apktool 3.0.3
+        run: |
+          curl -sL -o apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar
+          java -jar apktool.jar --version
+
+      - name: Decode APK with apktool (smali only, -r keeps original resources)
+        run: |
+          APK="Instagram-v435.0.0.37.76-patches-v3.8.0.apk"
+          echo "Decoding $APK with -r (no resource decode)..."
+          java -Xmx4g -jar apktool.jar d -r -f -o decoded "$APK" 2>&1 | tail -5
+          echo "=== smali_classes dirs ==="
+          ls decoded/ | grep smali
+          echo "=== total smali files ==="
+          find decoded -name "*.smali" | wc -l
+
+      - name: Extract target smali files + grep results
+        run: |
+          set +e
+          mkdir -p extraction/smali-files extraction/greps
+
+          # ── 1. Extract specific smali files by name (preserve relative path) ──
+          echo "=== Extracting target smali files ==="
+          for name in BottomSheetFragment G28 6BM 1fC 2ZS 0bQ EPN VBP 33g Krc YfD 9b7 ArchiveReelFragment ReelViewerFragment; do
+            find decoded/smali* -name "${name}.smali" | while read f; do
+              rel=$(echo "$f" | sed 's|decoded/||')
+              mkdir -p "extraction/smali-files/$(dirname "$rel")"
+              cp "$f" "extraction/smali-files/$rel"
+              echo "  copied: $rel"
+            done
+          done
+
+          # ── 2. Find ALL files containing setNavigationBarColor and extract them ──
+          echo "=== Finding files with setNavigationBarColor ==="
+          grep -rl "setNavigationBarColor" decoded/smali*/ > extraction/greps/files-with-setNavigationBarColor.txt || true
+          cat extraction/greps/files-with-setNavigationBarColor.txt || true
+          while read f; do
+            rel=$(echo "$f" | sed 's|decoded/||')
+            mkdir -p "extraction/smali-files/$(dirname "$rel")"
+            cp "$f" "extraction/smali-files/$rel"
+            echo "  copied: $rel"
+          done < extraction/greps/files-with-setNavigationBarColor.txt
+
+          # ── 3. Find the class that DEFINES A0R(I)V (the navigator) and extract it ──
+          echo "=== Finding definers of A0R(I)V ==="
+          grep -rln '\.method.*A0R(I)V' decoded/smali*/ > extraction/greps/A0R-definers.txt || true
+          cat extraction/greps/A0R-definers.txt || true
+          while read f; do
+            rel=$(echo "$f" | sed 's|decoded/||')
+            mkdir -p "extraction/smali-files/$(dirname "$rel")"
+            cp "$f" "extraction/smali-files/$rel"
+            echo "  copied: $rel"
+          done < extraction/greps/A0R-definers.txt
+
+          # ── 4. Find ALL files containing setOnApplyWindowInsetsListener ──
+          echo "=== Finding files with setOnApplyWindowInsetsListener ==="
+          grep -rl "setOnApplyWindowInsetsListener" decoded/smali*/ > extraction/greps/files-with-setOnApplyWindowInsetsListener.txt || true
+          cat extraction/greps/files-with-setOnApplyWindowInsetsListener.txt || true
+          while read f; do
+            rel=$(echo "$f" | sed 's|decoded/||')
+            mkdir -p "extraction/smali-files/$(dirname "$rel")"
+            cp "$f" "extraction/smali-files/$rel"
+          done < extraction/greps/files-with-setOnApplyWindowInsetsListener.txt
+
+          # ── 5. Grep with context for key patterns ──
+          echo "=== Running contextual greps ==="
+
+          # setNavigationBarColor — ALL occurrences with 5 lines context
+          grep -rn -C 5 "setNavigationBarColor" decoded/smali*/ > extraction/greps/setNavigationBarColor-context.txt 2>/dev/null || true
+
+          # setNavigationBarContrastEnforced
+          grep -rn -C 3 "setNavigationBarContrastEnforced" decoded/smali*/ > extraction/greps/setNavigationBarContrastEnforced-context.txt 2>/dev/null || true
+
+          # ALL callers of A0R(I)V (invoke-virtual or invoke-interface)
+          grep -rn '->A0R(I)V' decoded/smali*/ > extraction/greps/A0R-all-callers.txt 2>/dev/null || true
+
+          # Who calls BottomSheetFragment A05 (the nav bar color setter method)
+          grep -rn 'BottomSheetFragment;->A05' decoded/smali*/ > extraction/greps/callers-of-BSF-A05.txt 2>/dev/null || true
+
+          # bottomSheetContainer references
+          grep -rn 'bottomSheetContainer' decoded/smali*/ > extraction/greps/bottomSheetContainer-refs.txt 2>/dev/null || true
+
+          # CommentListBottomsheet references (to trace the comments flow)
+          grep -rn 'CommentListBottomsheet\|C54625Krc\|C86682YfD' decoded/smali*/ > extraction/greps/comment-fragment-refs.txt 2>/dev/null || true
+
+          # comment_composer / EditText View ID references (for gray box patch)
+          grep -rn 'comment_composer\|layout_comment_thread_edittext\|ComposerAutoCompleteTextView' decoded/smali*/ > extraction/greps/comment-composer-refs.txt 2>/dev/null || true
+
+          # setBackgroundColor calls in Krc.smali (comment fragment)
+          KRC=$(find decoded/smali* -name "Krc.smali" | head -1)
+          if [ -n "$KRC" ]; then
+            grep -n 'setBackgroundColor\|setBackground\|findViewById\|0cW;->A0R\|0cW;->A03' "$KRC" > extraction/greps/Krc-bg-calls.txt || true
+            echo "=== Krc.smali bg/findViewById calls ==="
+            cat extraction/greps/Krc-bg-calls.txt
+          fi
+
+          # ArchiveReelFragment specific greps
+          ARF=$(find decoded/smali* -name "ArchiveReelFragment.smali" | head -1)
+          if [ -n "$ARF" ]; then
+            grep -n 'setBackgroundColor\|0cW;->A0R\|setFitsSystemWindows\|A0O\|igds_color_primary_background\|setStatusBarColor\|setSystemUiVisibility' "$ARF" > extraction/greps/ArchiveReelFragment-calls.txt || true
+            echo "=== ArchiveReelFragment calls ==="
+            cat extraction/greps/ArchiveReelFragment-calls.txt
+          fi
+
+          # setStatusBarColor — for reference
+          grep -rn -C 3 "setStatusBarColor" decoded/smali*/ > extraction/greps/setStatusBarColor-context.txt 2>/dev/null || true
+
+          # fitsSystemWindows in smali
+          grep -rn 'fitsSystemWindows\|setFitsSystemWindows' decoded/smali*/ > extraction/greps/fitsSystemWindows-refs.txt 2>/dev/null || true
+
+          # List all method definitions in BottomSheetFragment.smali (to verify A05 exists)
+          BSF=$(find decoded/smali* -name "BottomSheetFragment.smali" | head -1)
+          if [ -n "$BSF" ]; then
+            grep -n '\.method' "$BSF" > extraction/greps/BottomSheetFragment-methods.txt
+            echo "=== BottomSheetFragment methods ==="
+            cat extraction/greps/BottomSheetFragment-methods.txt
+          fi
+
+          # ── 6. Also extract the FULL BottomSheetFragment.smali and its parent classes ──
+          # The comments fragment (C54625Krc) extends QF1 extends AbstractC27985AXi...
+          # Extract any smali files referencing the comment fragment classes
+          echo "=== Extracting comment-related smali ==="
+          for name in C54625Krc C86682YfD QF1 C7DN C50186J5g C109193lI; do
+            find decoded/smali* -name "${name}.smali" | while read f; do
+              rel=$(echo "$f" | sed 's|decoded/||')
+              mkdir -p "extraction/smali-files/$(dirname "$rel")"
+              cp "$f" "extraction/smali-files/$rel"
+              echo "  copied: $rel"
+            done
+          done
+
+          # ── 7. Summary ──
+          echo "=== Extraction summary ==="
+          echo "Smali files extracted:"
+          find extraction/smali-files -name "*.smali" | wc -l
+          echo "Grep result files:"
+          ls -la extraction/greps/
+          echo "Total extraction size:"
+          du -sh extraction/
+
+      - name: Upload smali extraction
+        uses: actions/upload-artifact@v4
+        with:
+          name: smali-extraction
+          path: extraction/
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Summary
+        run: |
+          echo "## Smali Extraction Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Extracted target smali files + grep results for analysis." >> $GITHUB_STEP_SUMMARY
+          echo "Artifact: smali-extraction" >> $GITHUB_STEP_SUMMARY

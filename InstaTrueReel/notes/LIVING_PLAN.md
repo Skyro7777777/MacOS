@@ -187,9 +187,6 @@ investigate next round, AFTER the status-bar diagnostic resolves:
 - Diagnostic workflow will be triggered once committed.
 - Awaiting: user installs diagnostic APK, screenshots a reel, reports the
   status-bar strip color. That single data point picks the next branch.
-
----
-
 ## 2026-08-20 — STEP 13: real jadx analysis (156k Java files) + v2 diagnostic
 
 ### What this pass did differently (user feedback)
