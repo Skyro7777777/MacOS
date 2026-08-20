@@ -187,3 +187,86 @@ investigate next round, AFTER the status-bar diagnostic resolves:
 - Diagnostic workflow will be triggered once committed.
 - Awaiting: user installs diagnostic APK, screenshots a reel, reports the
   status-bar strip color. That single data point picks the next branch.
+
+---
+
+## 2026-08-20 — STEP 13: real jadx analysis (156k Java files) + v2 diagnostic
+
+### What this pass did differently (user feedback)
+User pointed out I was "compromising" — working only off the small 580 KB
+smali-extraction artifact instead of downloading the MAIN 150 MB jadx artifact
+(156k Java files). Corrected: downloaded the jadx artifact (157 MB zip →
+192 MB inner zip → 1.1 GB p002X/ Java + com/instagram/), downloaded the actual
+APK (240 MB) via LFS media URL, apktool-decoded resources (1.9 GB), and
+dispatched 3 PARALLEL subagents (3-A, 3-B, 3-C) to analyze the real Java.
+
+### THE ROOT CAUSE (found from real Java, not prior notes)
+3 subagents independently confirmed:
+1. **`2ZS.A01` is NOT called by InstagramMainActivity at startup.** It's only
+   called by `ClipsTabFragment.onResume` (Reels tab) + 2 rare dialog fragments.
+   `InstagramMainActivity.java` (540 KB / 8792 lines) has ZERO references to
+   C2ZS. So our v1 A-DIAG block (window bg=RED) in 2ZS.A01 NEVER ran on the
+   home feed → no RED → user saw black. [3-A]
+2. **The ACTUAL startup chrome path is** `InstagramMainActivity.A1z()`
+   (onResumePostSuper, Java ~line 7232):
+   ```java
+   if (c31610jSB4p == null || !c31610jSB4p.A0D)
+       AbstractC54451fC.A03(this, getColor(igds_color_primary_background)); // home feed → BLACK
+   else {
+       AbstractC54451fC.A03(this, getColor(R.color.bds_transparent));         // Reels → transparent
+       AbstractC54451fC.A05(this, false);
+   }
+   C54511fI.A01(this); // nav bar + scrim
+   ```
+   `1fC.A03` → calls `1fC.A04` (sets statusBarColor) + `1fC.A05` (sets
+   systemUiVisibility). So `1fC.A04` IS called on EVERY screen. [3-A, 3-B]
+3. **A5 (1fC.A04 → p1=0) IS working.** The status bar color IS transparent on
+   all screens. But the user sees BLACK because the **window background is
+   `?igds_color_primary_background = bds_black = #000000` (pure black)** — the
+   theme default. The transparent status bar shows the black window bg beneath.
+   [3-B, 3-C]
+4. **Prior notes were WRONG about the color.** They said `igds_prism_black`
+   (#0c1014 dark navy). The actual default is `bds_black` (#000000 pure black),
+   applied via the `IgdsSemanticColorsDark` overlay. This matches the user's
+   screenshot showing PURE BLACK, not #0c1014. [3-B, 3-C]
+5. **No black overlay view exists** in the Reels layout. The
+   `layout_activity_main_internal_viewpager2.xml` has `swipeable_tab_view_pager`
+   as `match_parent x match_parent` with no top margin/padding/background. The
+   black strip is 100% the window background showing through the transparent
+   status bar. [3-C]
+
+### v1 failure explained
+v1 put `window.setBackgroundDrawable(RED)` in `2ZS.A01` (Reels-only). Since
+`2ZS.A01` is NOT called by MainActivity at startup, the window bg stayed
+#000000 (theme default) on the home feed. On Reels, A01 IS called, so RED
+should have shown — but the user either didn't navigate to Reels, or the
+:202/:410 re-paints overrode it. Either way, the hook was wrong.
+
+### v2 CORRECTION: move the RED block to 1fC.A04
+`1fC.A04` is called on EVERY screen (home feed + Reels) via
+`MainActivity.A1z → 1fC.A03 → 1fC.A04`. Inserting the window-bg-RED +
+FLAG_LAYOUT_NO_LIMITS + decorView-transparent block at the START of A04
+guarantees it fires globally. Combined with A5 (p1=0, merged into the same
+block), this makes the status bar transparent + window bg RED on every screen.
+
+### v2 diagnostic (this round)
+- Patch script: `InstaTrueReel/patches/apply_diagnostic_v2.py`
+- Workflow: `.github/workflows/insta-diagnostic-v2-build.yml`
+- Artifact: `InstaTrueReel-diagnostic-v2-apk`
+- Patches: A5v2 (1fC.A04 → window RED + LAYOUT_NO_LIMITS + statusbar 0 +
+  decorView 0, ALL screens) + A1 + A2 + A3 + A7 + B1 + B2.
+- Dry-run: all patches apply cleanly against real smali.
+
+### EXPECTED v2 result (ANY screen — home feed OR Reels)
+- **RED strip** → 1fC.A04 runs + window bg is the layer → fix = null window
+  bg + FLAG_LAYOUT_NO_LIMITS (so content fills the status bar region).
+- **BLACK strip** → 1fC.A04 not called (unlikely, 3 subagents confirmed it is)
+  OR FLAG_FULLSCREEN from 1fC.A05(false) hides the bar → deeper dig.
+- **video shows** → DONE.
+
+### Comment bar (CS2) — still pending
+The Task 2 subagent found `3lH.A0R(I)V` line 461 unconditionally calls
+`1fI.A05(activity, true)` → `setNavigationBarContrastEnforced(true)` → Android
+auto-adds a black scrim. Fix = change L461 `const/4 v0, 0x1` → `const/4 v0, 0x0`.
+Will ship in the NEXT build (after status-bar v2 diagnostic resolves), combined
+with the status-bar fix.

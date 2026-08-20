@@ -1,12 +1,7 @@
-name: InstaTrueReel Build
+name: InstaTrueReel Diagnostic v2 Build
 
 on:
   workflow_dispatch:
-    inputs:
-      features:
-        description: 'Which features to include (all, a, b, c, d)'
-        required: false
-        default: 'all'
 
 jobs:
   build:
@@ -43,9 +38,9 @@ jobs:
           echo "=== resources.arsc preserved ==="
           ls decoded/resources.arsc && echo "resources.arsc present (original, IDs preserved)" || echo "WARNING: no resources.arsc"
 
-      - name: Apply InstaTrueReel patches
+      - name: Apply InstaTrueReel DIAGNOSTIC v2 patches
         run: |
-          python3 InstaTrueReel/patches/apply_patches.py decoded
+          python3 InstaTrueReel/patches/apply_diagnostic_v2.py decoded
 
       - name: Build patched APK
         run: |
@@ -55,32 +50,35 @@ jobs:
 
       - name: Zipalign + Sign
         run: |
-          # uber-apk-signer handles zipalign + sign in one step (uses a debug key)
           java -jar uber-apk-signer.jar -a patched-unsigned.apk --out signed/
           ls -lh signed/
-          mv signed/patched-unsigned-aligned-debugSigned.apk InstaTrueReel-patched.apk || \
-          mv signed/*.apk InstaTrueReel-patched.apk
-          ls -lh InstaTrueReel-patched.apk
+          mv signed/patched-unsigned-aligned-debugSigned.apk InstaTrueReel-diagnostic-v2.apk 2>/dev/null || \
+          mv signed/patched-aligned-debugSigned.apk InstaTrueReel-diagnostic-v2.apk 2>/dev/null || \
+          mv signed/*.apk InstaTrueReel-diagnostic-v2.apk
+          ls -lh InstaTrueReel-diagnostic-v2.apk
 
-      - name: Upload patched APK
+      - name: Upload diagnostic v2 APK
         uses: actions/upload-artifact@v4
         with:
-          name: InstaTrueReel-patched-apk
-          path: InstaTrueReel-patched.apk
+          name: InstaTrueReel-diagnostic-v2-apk
+          path: InstaTrueReel-diagnostic-v2.apk
           retention-days: 30
           if-no-files-found: error
 
       - name: Summary
         run: |
-          echo "## InstaTrueReel Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## InstaTrueReel DIAGNOSTIC v2 Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Patched APK:** InstaTrueReel-patched-apk artifact" >> $GITHUB_STEP_SUMMARY
+          echo "**Patched APK:** InstaTrueReel-diagnostic-v2-apk artifact" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Features applied:" >> $GITHUB_STEP_SUMMARY
-          echo "- **A:** Transparent status bar (video behind floating white icons)" >> $GITHUB_STEP_SUMMARY
-          echo "- **B:** Floating bottom nav (transparent bg + zero gap)" >> $GITHUB_STEP_SUMMARY
-          echo "- **C:** Translucent comment sheet (80% black, video visible behind)" >> $GITHUB_STEP_SUMMARY
-          echo "- **D:** TikTok-style fullscreen (rotate to landscape on fullscreen swipe)" >> $GITHUB_STEP_SUMMARY
+          echo "### v1 → v2 CORRECTION" >> $GITHUB_STEP_SUMMARY
+          echo "v1 put the RED window-bg block in \`2ZS.A01\` (Reels-only — never called by MainActivity at startup)." >> $GITHUB_STEP_SUMMARY
+          echo "v2 moves it to \`1fC.A04\` (called on EVERY screen via \`MainActivity.A1z → 1fC.A03 → 1fC.A04\`)." >> $GITHUB_STEP_SUMMARY
+          echo "This was confirmed by reading the real jadx Java (156k files)." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Install note:" >> $GITHUB_STEP_SUMMARY
-          echo "Uninstall the current Instagram first (signature changed). Then install the patched APK." >> $GITHUB_STEP_SUMMARY
+          echo "### Install + test (ANY screen — home feed OR Reels):" >> $GITHUB_STEP_SUMMARY
+          echo "| Status-bar strip color | Meaning | Next step |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **RED** | 1fC.A04 runs + window bg is the layer showing through transparent status bar | Fix = null window bg + FLAG_LAYOUT_NO_LIMITS (content fills status bar region) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **BLACK** | 1fC.A04 not called, OR FLAG_FULLSCREEN from 1fC.A05(false) hides the bar | Deeper investigation needed |" >> $GITHUB_STEP_SUMMARY
+          echo "| **video shows** | DONE | Switch RED→null, add CS2 comment-bar fix, ship |" >> $GITHUB_STEP_SUMMARY
