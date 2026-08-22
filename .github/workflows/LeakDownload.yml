@@ -1,0 +1,115 @@
+name: Fast Multi-Part File Download
+
+on:
+  workflow_dispatch:
+    inputs:
+      file_url:
+        description: "Full direct download URL"
+        required: true
+        type: string
+      save_as:
+        description: "Save as this filename (empty = keep original name)"
+        required: false
+        type: string
+        default: ""
+      connections:
+        description: "Number of connections/splits (8-32 recommended for 30-35 MB)"
+        required: false
+        type: string
+        default: "16"
+      user_agent:
+        description: "Custom User-Agent (leave empty for default)"
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install aria2 (fastest multi-connection tool)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq aria2
+
+      - name: Download with maximum efficiency
+        run: |
+          URL="${{ github.event.inputs.file_url }}"
+          NAME="${{ github.event.inputs.save_as }}"
+          CONN="${{ github.event.inputs.connections }}"
+          UA="${{ github.event.inputs.user_agent }}"
+
+          # Build extra options
+          EXTRA=""
+          if [ -n "$UA" ]; then
+            EXTRA="--user-agent=$UA"
+          fi
+
+          # High efficiency settings for \~30-35 MB files
+          # -x / -s = multi-connection + multi-split
+          # small min-split for better parallelization
+          # no file pre-allocation = faster start
+          # aggressive retries + keep-alive
+          if [ -z "$NAME" ]; then
+            aria2c \
+              -x $CONN \
+              -s $CONN \
+              -k 512K \
+              --max-connection-per-server=$CONN \
+              --min-split-size=512K \
+              --file-allocation=none \
+              --continue=true \
+              --max-tries=0 \
+              --retry-wait=2 \
+              --timeout=30 \
+              --connect-timeout=15 \
+              --lowest-speed-limit=0 \
+              --max-overall-download-limit=0 \
+              --http-accept-gzip=true \
+              --enable-http-keep-alive=true \
+              --enable-http-pipelining=true \
+              --summary-interval=5 \
+              --console-log-level=notice \
+              $EXTRA \
+              "$URL"
+          else
+            aria2c \
+              -x $CONN \
+              -s $CONN \
+              -k 512K \
+              --max-connection-per-server=$CONN \
+              --min-split-size=512K \
+              --file-allocation=none \
+              --continue=true \
+              --max-tries=0 \
+              --retry-wait=2 \
+              --timeout=30 \
+              --connect-timeout=15 \
+              --lowest-speed-limit=0 \
+              --max-overall-download-limit=0 \
+              --http-accept-gzip=true \
+              --enable-http-keep-alive=true \
+              --enable-http-pipelining=true \
+              --summary-interval=5 \
+              --console-log-level=notice \
+              $EXTRA \
+              -o "$NAME" \
+              "$URL"
+          fi
+
+      - name: Show downloaded file info
+        run: |
+          ls -lh
+          echo "-----"
+          du -h *
+
+      - name: Upload as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: downloaded-file
+          path: |
+            *
+            !*.yml
+            !*.yaml
+          if-no-files-found: error
+          retention-days: 5
