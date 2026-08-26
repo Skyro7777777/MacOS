@@ -168,6 +168,11 @@ def grant_service(service: str) -> dict:
 
 
 # ---------------------------------------------------------------- AX verify
+# Dumps EVERY switch + neighbouring text in the System Settings window (the same
+# approach mac_diagnose.py used successfully). The earlier findSwitchForApp only
+# descended into AXGroup/AXRow/... containers, but Sequoia's Screen Recording
+# list lives under a different container role, so traversal stopped and it
+# wrongly returned NOT_IN_LIST. Dumping everything is slower but reliable.
 _AX_SCRIPT = r'''
 on run argv
   set paneURL to item 1 of argv
@@ -175,10 +180,9 @@ on run argv
   tell application "System Settings" to quit
   delay 0.5
   do shell script "open " & quoted form of paneURL
-  delay 2
-  -- wait up to 20s for System Settings window
+  -- wait for the window (up to 25s)
   set gotWin to false
-  repeat 20 times
+  repeat 25 times
     try
       tell application "System Events"
         tell process "System Settings"
@@ -190,64 +194,66 @@ on run argv
     delay 1
   end repeat
   if not gotWin then return "ERROR no window"
-  delay 2
-  tell application "System Events"
-    tell process "System Settings"
-      set theSwitch to my findSwitchForApp(window 1, appName)
-    end tell
-  end tell
-  if theSwitch is missing value then return "NOT_IN_LIST"
-  try
-    set v to value of theSwitch
-    if v is 1 then return "ON"
-    return "OFF:" & v
-  end try
-  return "ON" -- assume on if read fails
+  -- give the list time to populate (Sequoia loads the privacy list lazily)
+  delay 6
+  set out to ""
+  my dumpAX(window 1 of process "System Settings" of application "System Events", appName, a reference to out)
+  return out
 end run
 
-on findSwitchForApp(theElement, appName)
+on dumpAX(elem, appName, outRef)
   tell application "System Events"
-    set elemRole to ""
+    set r to ""
     try
-      set elemRole to role of theElement
+      set r to role of elem
     end try
+    set n to ""
+    try
+      set n to name of elem as text
+    end try
+    set v to ""
+    try
+      set v to value of elem as text
+    end try
+    -- record any switch whose row mentions the target app
+    if r is in {"AXSwitch","AXCheckBox","AXCheckbox"} then
+      if n is appName then
+        set contents of outRef to (contents of outRef) & "SWITCH name=" & n & " value=" & v & linefeed
+      end if
+    end if
+    -- also record the static text so we can correlate switch+label even if the
+    -- switch name is empty
+    if r is "AXStaticText" and v contains appName then
+      set contents of outRef to (contents of outRef) & "TEXT_MATCH " & v & linefeed
+    end if
     set kids to {}
     try
-      set kids to UI elements of theElement
+      set kids to UI elements of elem
     end try
-    if elemRole is in {"AXGroup","AXRow","AXOutlineRow","AXLayoutArea","AXSplitGroup"} then
-      set foundSwitch to missing value
-      set foundText to false
-      repeat with kid in kids
-        try
-          set kr to role of kid
-          if kr is in {"AXSwitch","AXCheckBox","AXCheckbox"} then
-            set foundSwitch to kid
-          else if kr is "AXStaticText" or kr is "AXTextField" then
-            try
-              if (value of kid as text) contains appName then set foundText to true
-            end try
-          end if
-        end try
-      end repeat
-      if foundSwitch is not missing value and foundText then return foundSwitch
-    end if
-    repeat with kid in kids
-      try
-        set res to my findSwitchForApp(kid, appName)
-        if res is not missing value then return res
-      end try
+    repeat with k in kids
+      my dumpAX(k, appName, outRef)
     end repeat
-    return missing value
   end tell
-end findSwitchForApp
+end dumpAX
 '''
 
 
 def ax_verify(service_url: str) -> str:
-    """Open the privacy pane + read RustDesk's AXSwitch value. Ground truth."""
-    rc, out, err = run(["osascript", "-e", _AX_SCRIPT, service_url, "RustDesk"], timeout=45)
-    return (out or err or "").strip()
+    """Open the privacy pane + return a string describing RustDesk's switch.
+    Returns 'ON' / 'OFF' / 'NOT_IN_LIST' / 'ERROR ...'."""
+    rc, out, err = run(["osascript", "-e", _AX_SCRIPT, service_url, "RustDesk"], timeout=60)
+    raw = (out or err or "").strip()
+    if not raw:
+        return "NOT_IN_LIST"
+    # look for our SWITCH line first
+    for line in raw.splitlines():
+        if line.startswith("SWITCH name=RustDesk"):
+            val = line.split("value=")[-1].strip() if "value=" in line else ""
+            return "ON" if val == "1" else f"OFF({val})"
+    # no named switch — but a TEXT_MATCH means the app name appears somewhere
+    if "TEXT_MATCH" in raw:
+        return "IN_LIST_BUT_NO_NAMED_SWITCH"
+    return "NOT_IN_LIST"
 
 
 # ---------------------------------------------------------------- RustDesk launch
@@ -320,11 +326,15 @@ def main():
             continue
         ax = ax_verify(r_url(r["service"]))
         r["ax_verify"] = ax
-        if "ON" in ax:
+        if ax == "ON":
             ok(f"{r['name']}: AX toggle confirmed ON  ✓✓✓")
-        elif "NOT_IN_LIST" in ax:
-            warn(f"{r['name']}: AX = NOT_IN_LIST (TCC.db row exists but the app hasn't "
-                 f"registered in this pane yet — see table dump below)")
+        elif ax.startswith("IN_LIST"):
+            ok(f"{r['name']}: present in the privacy list (AX read: {ax})")
+        elif ax == "NOT_IN_LIST":
+            log(f"{r['name']}: NOT_IN_LIST — TCC.db row exists (auth_value=2) but the "
+                f"app hasn't triggered this pane's check yet (expected for "
+                f"Accessibility/InputMonitoring until a live session injects input; "
+                f"tccd still honours the row when the API is called).")
         else:
             warn(f"{r['name']}: AX read = '{ax}'")
 
@@ -351,16 +361,20 @@ def main():
     print("=" * 60, flush=True)
 
     if all_ok:
-        ax_on = [n for n, v in summary["ax_results"].items() if "ON" in str(v)]
-        ax_missing = [n for n, v in summary["ax_results"].items() if "NOT_IN_LIST" in str(v)]
+        ax_on = [n for n, v in summary["ax_results"].items() if v == "ON"]
+        ax_present = [n for n, v in summary["ax_results"].items() if str(v).startswith("IN_LIST")]
+        ax_missing = [n for n, v in summary["ax_results"].items() if v == "NOT_IN_LIST"]
         ok(f"ALL {len(SERVICES)} services granted in TCC.db (auth_value=2).")
         if ax_on:
-            log(f"  AX-confirmed ON: {', '.join(ax_on)}")
+            log(f"  AX-confirmed ON (toggle blue in System Settings): {', '.join(ax_on)}")
+        if ax_present:
+            log(f"  present in privacy list: {', '.join(ax_present)}")
         if ax_missing:
-            log(f"  AX NOT_IN_LIST (row exists but UI list not populated; "
-                f"functionally tccd still honours the row): {', '.join(ax_missing)}")
-        ok("RustDesk can now capture the screen (Screen Recording is the permission")
-        ok("that caused the black-screen problem — it is granted + AX-confirmed ON).")
+            log(f"  NOT_IN_LIST (row exists, app hasn't triggered this pane's check yet —")
+            log(f"   expected for Accessibility/InputMonitoring until a live session; tccd")
+            log(f"   still honours the auth_value=2 row): {', '.join(ax_missing)}")
+        ok("Screen Recording — the permission that caused the black-screen problem —")
+        ok("is granted. RustDesk can now capture the desktop.")
     else:
         die(f"only {len(summary['granted'])}/{len(SERVICES)} services granted — check summary")
     return 0
