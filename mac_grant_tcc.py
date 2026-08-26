@@ -180,24 +180,35 @@ on run argv
   tell application "System Settings" to quit
   delay 0.5
   do shell script "open " & quoted form of paneURL
-  -- wait for the window (up to 25s)
+  delay 2
+  -- wait for the System Settings window (up to 25s)
   set gotWin to false
   repeat 25 times
-    try
-      tell application "System Events"
-        tell process "System Settings"
-          if (count of windows) > 0 then set gotWin to true
-        end tell
-      end tell
-    end try
+    tell application "System Events"
+      try
+        if (count of (every process whose name is "System Settings")) > 0 then
+          tell process "System Settings"
+            if (count of windows) > 0 then set gotWin to true
+          end tell
+        end if
+      end try
+    end tell
     if gotWin then exit repeat
     delay 1
   end repeat
   if not gotWin then return "ERROR no window"
-  -- give the list time to populate (Sequoia loads the privacy list lazily)
-  delay 6
+  -- give the privacy list time to populate (Sequoia loads it lazily)
+  delay 7
+  -- record EVERY switch + every static-text containing appName (mirrors the
+  -- mac_diagnose.py dumpAX that successfully found 'SWITCH name=RustDesk value=1')
   set out to ""
-  my dumpAX(window 1 of process "System Settings" of application "System Events", appName, a reference to out)
+  tell application "System Events"
+    set procList to (every process whose name is "System Settings")
+    if (count of procList) is 0 then return "ERROR no process"
+    set theProc to item 1 of procList
+    if (count of windows of theProc) is 0 then return "ERROR no window"
+    my dumpAX(window 1 of theProc, appName, a reference to out)
+  end tell
   return out
 end run
 
@@ -215,14 +226,9 @@ on dumpAX(elem, appName, outRef)
     try
       set v to value of elem as text
     end try
-    -- record any switch whose row mentions the target app
     if r is in {"AXSwitch","AXCheckBox","AXCheckbox"} then
-      if n is appName then
-        set contents of outRef to (contents of outRef) & "SWITCH name=" & n & " value=" & v & linefeed
-      end if
+      set contents of outRef to (contents of outRef) & "SWITCH name=" & n & " value=" & v & linefeed
     end if
-    -- also record the static text so we can correlate switch+label even if the
-    -- switch name is empty
     if r is "AXStaticText" and v contains appName then
       set contents of outRef to (contents of outRef) & "TEXT_MATCH " & v & linefeed
     end if
@@ -239,20 +245,31 @@ end dumpAX
 
 
 def ax_verify(service_url: str) -> str:
-    """Open the privacy pane + return a string describing RustDesk's switch.
+    """Open the privacy pane + return RustDesk's switch state.
     Returns 'ON' / 'OFF' / 'NOT_IN_LIST' / 'ERROR ...'."""
-    rc, out, err = run(["osascript", "-e", _AX_SCRIPT, service_url, "RustDesk"], timeout=60)
+    rc, out, err = run(["osascript", "-e", _AX_SCRIPT, service_url, "RustDesk"], timeout=70)
     raw = (out or err or "").strip()
-    if not raw:
-        return "NOT_IN_LIST"
-    # look for our SWITCH line first
+    if not raw or raw.startswith("ERROR"):
+        return raw or "NOT_IN_LIST"
+    # find the RustDesk switch by name; fall back to any TEXT_MATCH
+    rustdesk_switch = None
+    any_switches = []
+    text_match = False
     for line in raw.splitlines():
-        if line.startswith("SWITCH name=RustDesk"):
-            val = line.split("value=")[-1].strip() if "value=" in line else ""
-            return "ON" if val == "1" else f"OFF({val})"
-    # no named switch — but a TEXT_MATCH means the app name appears somewhere
-    if "TEXT_MATCH" in raw:
-        return "IN_LIST_BUT_NO_NAMED_SWITCH"
+        if line.startswith("SWITCH name="):
+            any_switches.append(line)
+            if line.startswith("SWITCH name=RustDesk "):
+                rustdesk_switch = line
+        elif line.startswith("TEXT_MATCH"):
+            text_match = True
+    if rustdesk_switch:
+        val = rustdesk_switch.split("value=")[-1].strip() if "value=" in rustdesk_switch else ""
+        return "ON" if val == "1" else f"OFF({val})"
+    if any_switches:
+        return "PANE_LOADED_BUT_NO_RUSTDESK_SWITCH (switches seen: " + \
+               "; ".join(any_switches[:6]) + ")"
+    if text_match:
+        return "IN_LIST_TEXT_ONLY"
     return "NOT_IN_LIST"
 
 
