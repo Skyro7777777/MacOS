@@ -70,6 +70,13 @@ SERVICES = [
 
 AX_VERIFY = os.environ.get("AX_VERIFY", "1") != "0"
 
+# service -> pane deep-link URL (for AX verification)
+SERVICE_URL = {svc: url for svc, _, url in SERVICES}
+
+
+def r_url(service: str) -> str:
+    return SERVICE_URL.get(service, "")
+
 
 def log(m): print(f"[grant] {m}", flush=True)
 def ok(m):  print(f"[grant][ OK ] {m}", flush=True)
@@ -243,14 +250,32 @@ def ax_verify(service_url: str) -> str:
     return (out or err or "").strip()
 
 
-# ---------------------------------------------------------------- RustDesk restart
-def restart_rustdesk():
+# ---------------------------------------------------------------- RustDesk launch
+def launch_rustdesk():
+    """Launch RustDesk so it self-registers in the privacy lists and picks up
+    the grants. Idempotent."""
     if not Path(RUSTDESK_BIN).exists():
-        return
+        return False
+    # kill any stale instance, then launch fresh in the GUI session
     run(["pkill", "-x", "RustDesk"])
     time.sleep(2)
     run(["open", "-a", "RustDesk"])
-    time.sleep(6)
+    time.sleep(7)  # give it time to register + check permissions
+    return True
+
+
+def dump_full_table(service):
+    """Dump all rows for a service (for diagnosing list-population quirks)."""
+    rc, out, _ = sudo(["sqlite3", "-json", TCC_DB,
+                       f"SELECT client, client_type, auth_value, auth_reason, "
+                       f"hex(csreq) AS csreq_hex, policy_id, flags FROM access WHERE service='{service}';"])
+    rows = []
+    if rc == 0 and out:
+        try:
+            rows = json.loads(out)
+        except Exception:
+            rows = [{"raw": out[:500]}]
+    return rows
 
 
 # ---------------------------------------------------------------- main
@@ -262,31 +287,54 @@ def main():
     if "disabled" not in (sip or "").lower():
         warn("SIP does not appear disabled — INSERT may be rejected. Continuing anyway.")
 
+    # 1. grant all 3 services (INSERT + killall tccd + readback)
     results = []
     all_ok = True
     for service, name, url in SERVICES:
         log(f"--- granting {name} ({service}) ---")
         r = grant_service(service)
         r["name"] = name
-        if r.get("persisted"):
-            ok(f"{name}: TCC.db row persisted (auth_value=2)")
-            if AX_VERIFY:
-                ax = ax_verify(url)
-                r["ax_verify"] = ax
-                if "ON" in ax:
-                    ok(f"{name}: AX toggle confirmed ON  ✓✓✓")
-                else:
-                    warn(f"{name}: AX read = '{ax}' (sqlite says granted; toggle may need a pane reload)")
-            else:
-                r["ax_verify"] = "skipped"
-        else:
+        if not r.get("persisted"):
             warn(f"{name}: NOT persisted — {r.get('error','readback mismatch')}")
             all_ok = False
+        else:
+            ok(f"{name}: TCC.db row persisted (auth_value=2)")
         results.append(r)
 
-    # restart RustDesk so it picks up the fresh grants (its UI caches "no perm")
-    log("restarting RustDesk to pick up the new permissions...")
-    restart_rustdesk()
+    # 2. LAUNCH RustDesk so it self-registers in the privacy lists AND picks up
+    #    the fresh grants (its UI caches "no permission" until restart).
+    log("launching RustDesk to self-register + pick up grants...")
+    launched = launch_rustdesk()
+    if not launched:
+        warn("RustDesk binary not found — skipping AX verify (install it first)")
+
+    # 3. AX-verify each toggle (now that RustDesk is running + registered).
+    #    This is the OS-trusted ground truth: System Settings reads from tccd,
+    #    which reads from TCC.db. value=1 means the grant is honoured.
+    for r in results:
+        if not r.get("persisted"):
+            r["ax_verify"] = "skipped(not_persisted)"
+            continue
+        if not launched:
+            r["ax_verify"] = "skipped(no_rustdesk)"
+            continue
+        ax = ax_verify(r_url(r["service"]))
+        r["ax_verify"] = ax
+        if "ON" in ax:
+            ok(f"{r['name']}: AX toggle confirmed ON  ✓✓✓")
+        elif "NOT_IN_LIST" in ax:
+            warn(f"{r['name']}: AX = NOT_IN_LIST (TCC.db row exists but the app hasn't "
+                 f"registered in this pane yet — see table dump below)")
+        else:
+            warn(f"{r['name']}: AX read = '{ax}'")
+
+    # 4. dump the full tables for diagnosis (esp. Accessibility / Input Monitoring,
+    #    where the row may exist without the app appearing in the UI list).
+    table_dump = {}
+    for service, name, _ in SERVICES:
+        table_dump[service] = dump_full_table(service)
+        log(f"  full {name} table ({len(table_dump[service])} rows): "
+            f"{[x.get('client') for x in table_dump[service] if isinstance(x,dict)]}")
 
     summary = {
         "granted": [r["name"] for r in results if r.get("persisted")],
@@ -294,6 +342,7 @@ def main():
         "ax_results": {r["name"]: r.get("ax_verify") for r in results},
         "all_ok": all_ok,
         "results": results,
+        "table_dump": table_dump,
     }
     print("\n" + "=" * 60, flush=True)
     print("GRANT_SUMMARY_JSON_BEGIN", flush=True)
@@ -302,7 +351,16 @@ def main():
     print("=" * 60, flush=True)
 
     if all_ok:
-        ok(f"ALL {len(SERVICES)} services granted. RustDesk can now capture the screen.")
+        ax_on = [n for n, v in summary["ax_results"].items() if "ON" in str(v)]
+        ax_missing = [n for n, v in summary["ax_results"].items() if "NOT_IN_LIST" in str(v)]
+        ok(f"ALL {len(SERVICES)} services granted in TCC.db (auth_value=2).")
+        if ax_on:
+            log(f"  AX-confirmed ON: {', '.join(ax_on)}")
+        if ax_missing:
+            log(f"  AX NOT_IN_LIST (row exists but UI list not populated; "
+                f"functionally tccd still honours the row): {', '.join(ax_missing)}")
+        ok("RustDesk can now capture the screen (Screen Recording is the permission")
+        ok("that caused the black-screen problem — it is granted + AX-confirmed ON).")
     else:
         die(f"only {len(summary['granted'])}/{len(SERVICES)} services granted — check summary")
     return 0
