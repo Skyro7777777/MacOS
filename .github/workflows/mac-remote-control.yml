@@ -1,0 +1,58 @@
+name: macOS 15 Remote Control
+
+on:
+  workflow_dispatch:
+    inputs:
+      hold_minutes:
+        description: "How long to keep the session alive (minutes, max 235)"
+        required: false
+        default: "120"
+      fallback_web_remote:
+        description: "If automated grant fails, start manual web remote (0/1)"
+        required: false
+        default: "0"
+
+jobs:
+  remote-control:
+    runs-on: macos-15
+    timeout-minutes: 240
+    env:
+      HOLD_MINUTES: ${{ inputs.hold_minutes }}
+      FALLBACK_WEB_REMOTE: ${{ inputs.fallback_web_remote }}
+      TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+      RUSTDESK_PASSWORD: ${{ secrets.RUSTDESK_PASSWORD }}
+      MAC_USER_PASSWORD: ${{ secrets.MAC_USER_PASSWORD }}
+      MAC_USER: ${{ secrets.MAC_USER }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Step 00 — provision helper admin user
+        run: bash mac_00_setup_user.sh
+
+      - name: Step 01 — install + connect Tailscale
+        run: bash mac_01_install_tailscale.sh
+
+      - name: Step 02 — install + configure RustDesk (direct-IP, no relay)
+        run: bash mac_02_install_rustdesk.sh
+
+      - name: Step 03 — grant TCC permissions (AUTOMATED)
+        run: bash mac_03_grant_permissions.sh
+
+      - name: Step 04 — verify RustDesk is listening + print connection info
+        run: bash mac_04_start_rustdesk.sh
+
+      - name: Step 05 — hold session open for remote control
+        run: bash mac_05_hold_session.sh
+
+      - name: Upload screenshots + logs (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-remote-session
+          path: |
+            /tmp/apple-project/screenshots/
+            /tmp/apple-project/grant_output.log
+            /tmp/apple-project/connection-info.txt
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,45 +1,42 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  mac_03_grant_permissions.sh  →  REPLACED with web remote + manual control
+#  mac_03_grant_permissions.sh  —  AUTOMATED TCC granter (Phase 1)
 #
-#  Instead of fighting with TCC permissions automatically (which failed 40+
-#  times), we start a WEB REMOTE that lets YOU control the macOS desktop from
-#  your browser. You manually:
-#    1. Click the "Configure" button in RustDesk
-#    2. Click the toggle in System Settings
-#    3. Type the password (shown in the log)
-#    4. Click "Later"
-#    5. Repeat for each permission
+#  Grants Screen Recording + Accessibility + Input Monitoring to RustDesk by
+#  writing directly to the system TCC.db. NO clicking. NO AI. NO human.
 #
-#  The web remote uses screencapture (proven to work) + cliclick (proven to
-#  work). No VNC, no framebuffer, no black screen. No RustDesk permissions
-#  needed for the web remote itself — it uses bash's pre-granted TCC.
+#  This works because the GitHub macos-15 runner ships with SIP DISABLED
+#  (actions/runner-images#8162), so the system TCC.db is root-writable, and the
+#  pre-granted bash/hosted-compute-agent/provisioner entries all carry an EMPTY
+#  csreq blob (tccd does not validate csreq on this image). We mirror that
+#  pattern. Verified by mac_diagnose.py + an AX read showing RustDesk's Screen
+#  Recording toggle = ON.
 #
-#  After you finish granting permissions, the web remote stays open so you
-#  can control the desktop. RustDesk is also running (once you grant it
-#  permissions, you can switch to RustDesk for real-time control).
+#  Fallback: if the granter fails (e.g. a future macOS bumps SIP back on), set
+#  the env var FALLBACK_WEB_REMOTE=1 to start web_remote.py for manual control.
 # =============================================================================
 set -euo pipefail
 source "$(dirname "$0")/mac_lib.sh"
 
-log "Step 03 — web remote (manual permission granting + desktop control)"
+log "Step 03 — automated TCC permission granter"
 
 require_env MAC_USER_PASSWORD
+require_env RUSTDESK_PASSWORD
 
-# --- 0. install deps --------------------------------------------------------
+# --- 0. deps ---------------------------------------------------------------
 if ! command -v cliclick >/dev/null 2>&1; then
-  log "installing cliclick"
-  brew install cliclick
+  brew install cliclick 2>&1 | tail -n2
 fi
 
-# --- 1. install RustDesk (so you can grant it permissions via web remote) ---
+# --- 1. make sure RustDesk is installed + configured (idempotent) -----------
+# (matches mac_02; kept here so step 03 is self-sufficient even if 02 was skipped)
 if [ ! -x "$RUSTDESK_BIN" ]; then
-  log "installing RustDesk"
-  brew install --cask rustdesk 2>&1 | tail -n3
+  log "RustDesk not found — installing"
+  brew install --cask rustdesk 2>&1 | tail -n3 || true
   xattr -dr com.apple.quarantine "$RUSTDESK_APP" 2>/dev/null || true
 fi
 
-# --- 2. write RustDesk config (direct-IP mode, no relay) --------------------
+# write/refresh the direct-IP config (plaintext; RustDesk re-encrypts on save)
 RUSTDESK_ID="${RUSTDESK_ID:-$(date +%s | tail -c 9)}"
 RUSTDESK_USER_PREFS="/Users/$RUNNER_USER/Library/Preferences/com.carriez.RustDesk"
 sudo -u "$RUNNER_USER" mkdir -p "$RUSTDESK_USER_PREFS"
@@ -58,69 +55,50 @@ verification-method = 'use-fixed-password'
 EOF
 sudo mkdir -p /var/root/Library/Preferences/com.carriez.RustDesk
 sudo cp "$RUSTDESK_USER_PREFS/RustDesk.toml" "$RUSTDESK_USER_PREFS/RustDesk2.toml" \
-     /var/root/Library/Preferences/com.carriez.RustDesk/
+     /var/root/Library/Preferences/com.carriez.RustDesk/ 2>/dev/null || true
 echo "$RUSTDESK_ID" > "$STATE_DIR/rustdesk-id"
 echo "$RUSTDESK_PASSWORD" > "$STATE_DIR/rustdesk-password"
 chmod 600 "$STATE_DIR/rustdesk-password"
-ok "RustDesk installed + configured (id=$RUSTDESK_ID, port=$RUSTDESK_PORT)"
+ok "RustDesk configured (id=$RUSTDESK_ID, port=$RUSTDESK_PORT)"
 
-# --- 3. launch RustDesk (so it appears on screen for permission granting) ---
-log "launching RustDesk on screen..."
-gui_run open -a RustDesk || true
-sleep 3
+# --- 2. pre-authorize screencapture (kills the replayd "bypass picker" dialog)
+preauthorize_screencapture
 
-# --- 4. start screenshot + dialog-dismissal loops (for artifact) ------------
+# --- 3. screenshot + dialog-dismissal loops (for artifact + to auto-dismiss) -
 start_screenshot_loop
 start_dialog_dismissal_loop
 
-# --- 5. start the web remote ------------------------------------------------
-log "starting web remote on port 8080..."
-log ""
-log "=============================================================================="
-log "  WEB REMOTE IS READY"
-log "=============================================================================="
-log ""
-log "  Open this URL in your browser:"
-log "    http://$(cat "$STATE_DIR/tailscale-ip" 2>/dev/null || echo '<tailscale-ip>'):8080"
-log ""
-log "  You can now control the macOS desktop from your browser:"
-log "    - CLICK on the screenshot to click that position"
-log "    - RIGHT-CLICK for right-click"
-log "    - Type text in the text box + click 'Type'"
-log "    - Press Return / Tab / Escape / Cmd+Shift+G with the buttons"
-log ""
-log "  TO GRANT RUSTDESK PERMISSIONS MANUALLY:"
-log "    1. If a dialog 'Allow RustDesk to find devices?' appears, click 'Allow'"
-log "    2. Click the 'Configure' button in RustDesk's pink section"
-log "    3. In System Settings, click the toggle next to 'RustDesk'"
-log "    4. When the password prompt appears, type: $MAC_USER_PASSWORD"
-log "    5. Click 'Modify Settings' or press Return"
-log "    6. Click 'Later' (dismiss Quit & Reopen)"
-log "    7. Repeat for each permission (Screen Recording, Accessibility, Input Monitoring)"
-log ""
-log "  After granting permissions, RustDesk will listen on port $RUSTDESK_PORT"
-log "  and you can connect via RustDesk client for real-time control."
-log ""
-log "  The web remote stays open so you can keep controlling the desktop."
-log "  The macOS user password is: $MAC_USER_PASSWORD"
-log ""
-log "=============================================================================="
+# --- 4. THE GRANT (pure sqlite3, no UI) -------------------------------------
+log "running mac_grant_tcc.py ..."
+set +e
+python3 "$PROJECT_ROOT/mac_grant_tcc.py" > "$STATE_DIR/grant_output.log" 2>&1
+GRANT_RC=$?
+set -e
+cat "$STATE_DIR/grant_output.log"
 
-# Run the web remote (blocks until the hold session ends)
-python3 "$PROJECT_ROOT/web_remote.py" 8080 &
-WEB_PID=$!
-log "web remote PID=$WEB_PID"
+if [ "$GRANT_RC" -eq 0 ]; then
+  ok "AUTOMATED GRANT SUCCEEDED — RustDesk has Screen Recording + Accessibility + Input Monitoring"
+  stop_screenshot_loop
+  stop_dialog_dismissal_loop
+  take_screenshot "03_grant_success"
+  exit 0
+fi
 
-# --- 6. wait for the hold session to end (or web remote to die) -------------
-# The web remote runs in the background. We wait here so the step doesn't
-# complete until the operator is done (or the workflow timeout hits).
-# Step 05 (hold session) will also run after this step completes.
-log "web remote is running — step 03 will stay alive until the web remote exits"
-log "(the web remote runs forever; the workflow timeout-minutes will cap it)"
+# --- 5. fallback: optional manual web remote --------------------------------
+warn "automated granter exited $GRANT_RC"
+if [ "${FALLBACK_WEB_REMOTE:-0}" = "1" ]; then
+  log "FALLBACK_WEB_REMOTE=1 — starting web_remote.py for MANUAL control"
+  log "open in your browser: http://$(cat "$STATE_DIR/tailscale-ip" 2>/dev/null || echo '<ts-ip>'):8080"
+  log "grant Screen Recording / Accessibility / Input Monitoring manually,"
+  log "then create the done-flag:  touch $DONE_FLAG"
+  python3 "$PROJECT_ROOT/web_remote.py" 8080 &
+  WEB_PID=$!
+  wait $WEB_PID 2>/dev/null || true
+  stop_screenshot_loop
+  stop_dialog_dismissal_loop
+  exit 0
+fi
 
-# Wait for the web remote process
-wait $WEB_PID 2>/dev/null || true
-
-stop_screenshot_loop
-stop_dialog_dismissal_loop
-ok "web remote stopped"
+# no fallback — surface the failure
+take_screenshot "03_grant_failed"
+die "automated granter failed (rc=$GRANT_RC). Set FALLBACK_WEB_REMOTE=1 to enable manual web remote control."

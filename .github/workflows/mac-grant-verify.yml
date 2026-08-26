@@ -1,0 +1,84 @@
+name: macOS Grant Verify (no secrets)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'mac_grant_tcc.py'
+      - '.github/workflows/mac-grant-verify.yml'
+
+# Verifies the production TCC granter end-to-end WITHOUT needing Tailscale or
+# any secrets. Installs RustDesk, runs mac_grant_tcc.py, AX-verifies all three
+# toggles, screenshots the panes, uploads as artifact.
+
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install RustDesk (no secret needed)
+        run: |
+          brew install --cask rustdesk 2>&1 | tail -n3 || true
+          xattr -dr com.apple.quarantine /Applications/RustDesk.app 2>/dev/null || true
+          /Applications/RustDesk.app/Contents/MacOS/RustDesk --version || true
+
+      - name: Pre-authorize screencapture (no replayd dialog)
+        run: |
+          mkdir -p ~/Library/Group\ Containers/group.com.apple.replayd
+          python3 - <<'PY'
+          import plistlib, os, datetime
+          p = os.path.expanduser("~/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist")
+          ff = datetime.datetime(2099,1,1,0,0,0,tzinfo=datetime.timezone.utc)
+          d = {}
+          if os.path.exists(p):
+              try: d = plistlib.load(open(p,"rb"))
+              except: pass
+          for b in ["/bin/bash","/usr/bin/screencapture","/Applications/RustDesk.app/Contents/MacOS/RustDesk"]:
+              d[b] = {"kScreenCaptureApprovalLastAlerted": ff, "kScreenCaptureApprovalLastUsed": ff,
+                      "kScreenCapturePrivacyHintDate": ff, "kScreenCapturePrivacyHintPolicy": 7776000,
+                      "kScreenCaptureAlertableUsageCount": 0}
+          plistlib.dump(d, open(p,"wb"))
+          PY
+          sudo killall -HUP replayd 2>/dev/null || true
+          sleep 1
+
+      - name: Run the production TCC granter
+        run: |
+          sudo python3 mac_grant_tcc.py 2>&1 | tee /tmp/grant.log
+        continue-on-error: true
+
+      - name: Capture verification screenshots of all 3 panes
+        run: |
+          mkdir -p /tmp/verify
+          for pane in screen accessibility input; do
+            case "$pane" in
+              screen) U="x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture";;
+              accessibility) U="x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility";;
+              input) U="x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ListenEvent";;
+            esac
+            open "$U"
+            sleep 4
+            screencapture -x -C "/tmp/verify/pane_${pane}.png"
+          done
+          # also the desktop after RustDesk restart
+          /Applications/RustDesk.app/Contents/MacOS/RustDesk --version >/dev/null 2>&1 || true
+          pkill -x RustDesk 2>/dev/null || true; sleep 2
+          open -a RustDesk; sleep 6
+          screencapture -x -C "/tmp/verify/desktop_after.png"
+          # dump the live TCC.db rows for proof
+          sudo sqlite3 -json "/Library/Application Support/com.apple.TCC/TCC.db" \
+            "SELECT service, client, auth_value, auth_reason FROM access WHERE client='com.carriez.RustDesk';" \
+            | tee /tmp/verify/tcc_rows.json
+          cp /tmp/grant.log /tmp/verify/grant.log 2>/dev/null || true
+
+      - name: Upload verification artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-grant-verify
+          path: /tmp/verify/
+          if-no-files-found: warn
+          retention-days: 14

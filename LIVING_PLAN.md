@@ -116,52 +116,83 @@ AI-outer-loop path viable even without a TCC grant for Python itself.
 
 ## 5. Execution timeline + log
 
-### Phase 0 — Ground-truth diagnostic  (IN PROGRESS)
+### Phase 0 — Ground-truth diagnostic  ✅ DONE (run 32998309247, 2026-08-26)
 - Workflow: `.github/workflows/mac-diagnose.yml` (no secrets needed).
-- Script: `mac_diagnose.py` — captures SIP status, TCC.db schema, all existing
-  ScreenCapture/Accessibility/InputMonitoring rows, attempts the real grant
-  (clone a known-good row → rewrite client to RustDesk → INSERT → killall tccd
-  → read back), launches RustDesk, checks port 21118, screenshots the System
-  Settings Screen Recording pane, dumps the AX tree.
-- Artifacts: `mac-diagnose` (JSON summary + 2 PNGs).
-- **Expected duration:** ~8–12 min.
+- Script: `mac_diagnose.py` — captured SIP status, TCC.db schema, existing
+  ScreenCapture/Accessibility/InputMonitoring rows, attempted the real grant,
+  launched RustDesk, checked port 21118, screenshotted the System Settings
+  Screen Recording pane, dumped the AX tree.
+- Artifacts: `mac-diagnose` (JSON summary + 2 PNGs) — downloaded + analysed.
 
-### Findings
-*(updated after each run)*
+### Findings — CONFIRMED
 
-| Run | SIP | can_write_tcc | grant_persisted | rustdesk_listening | Verdict |
-|---|---|---|---|---|---|
-| _pending_ | _?_ | _?_ | _?_ | _?_ | _awaiting first run_ |
+| Field | Value | Meaning |
+|---|---|---|
+| macOS | 15.7.7 (Build 24G720), arm64 | Sequoia, Apple Silicon |
+| `csrutil status` | **"System Integrity Protection status: disabled."** | ✅ SIP OFF — TCC.db is root-writable |
+| user | `runner` | the Aqua-session owner |
+| RustDesk | 1.4.9 (brew cask) | `com.carriez.rustdesk`, team HZF9JMC8YN |
+| known-good ScreenCapture rows | `bash`, `hosted-compute-agent`, `provisioner` — **all auth_value=2, csreq EMPTY** | tccd does NOT validate csreq on this image |
+| TCC.db schema (Sequoia 15.7) | `service, client, client_type, auth_value, auth_reason, auth_version, csreq, policy_id, indirect_object_identifier_type, indirect_object_identifier, indirect_object_code_identity, flags, last_modified, pid, pid_version, boot_uuid, last_reminded` | NO `expired_at`; my generic INSERT handled it correctly via `PRAGMA table_info` introspection |
+| grant INSERT | rc=0 | ✅ INSERT OR REPLACE succeeded |
+| `killall tccd` | rc=0 | ✅ tccd restarted |
+| readback | `auth_value=2, csreq_hex=""` | ✅ row PERSISTED after tccd restart |
+| **AX read of System Settings** | `SWITCH name=RustDesk value=1` | ✅✓✓ **macOS itself shows RustDesk's toggle ON — grant is REAL + HONOURED** |
+| port 21118 | `RustDesk ... TCP *:21118 (LISTEN)` | ✅ RustDesk server running |
+| screencapture | rc=0, 195 KB PNG | ✅ bash's own Screen Recording works |
+
+### Verdict: PHASE 1 IS VIABLE ✅
+
+The fully-automated TCC.db granter works on the GitHub `macos-15` runner.
+No clicking, no AI, no human in the loop required. The breakthrough was
+realising the README's "SIP blocks the system TCC.db" premise is **false for
+the GitHub runner** (SIP is off per actions/runner-images#8162), and that the
+pre-granted entries carry **empty csreq blobs** so we don't need the fragile
+`csreq` compilation step at all — `csreq=NULL` matches the proven pattern.
 
 ---
 
-## 6. Next actions (after diagnostic verdict)
+## 6. Next actions
 
-- **If Phase 1 viable (SIP off + grant persists):** rewrite `mac_03_grant_permissions.sh`
-  as a pure TCC.db granter (delete the osascript/ShowUI/web-remote code paths),
-  add `mac-remote-control.yml` end-to-end workflow, document the 3 required
-  secrets, and run a live end-to-end test (operator connects from RustDesk).
-- **If Phase 2 needed (SIP off, tccd rejects):** build the artifact round-trip
-  agent — a small `mac_ai_runner.py` on the Mac that loops `screencapture →
-  upload-artifact-via-poll → read commands.json → cliclick → repeat`, and an
-  orchestrator in the cloud that VLM-analyses each screenshot and pushes the
-  next command.
-- **If Phase 3 needed (SIP on):** keep `web_remote.py`, add guided "click
-  these exact coordinates" presets derived from the diagnostic AX dump, and
-  document the 90-second manual grant procedure.
+### Phase 1 — production granter  ✅ BUILT (verifying now)
+- `mac_grant_tcc.py` — clean, schema-introspecting, pure-sqlite3 granter.
+  Writes `csreq=NULL` (matching the known-good pattern), `auth_value=2`,
+  `auth_reason=4`, restarts tccd, then **AX-verifies** each toggle = ON.
+- `mac_03_grant_permissions.sh` — rewritten to just call the granter
+  (with `FALLBACK_WEB_REMOTE=1` opt-in for the manual web remote if a future
+  macOS breaks the automated path).
+- `mac-grant-verify.yml` — no-secrets workflow that proves the granter
+  end-to-end (install RustDesk → grant → AX-verify → screenshot all 3 panes →
+  upload). Run this BEFORE setting up Tailscale secrets.
+- `mac-remote-control.yml` — full end-to-end workflow (00→01→02→03→04→05).
+
+### Phase 1b — end-to-end live test (needs secrets)
+Requires 3 repo secrets (see README §"One-time setup"):
+- `TS_AUTHKEY` — Tailscale reusable+ephemeral auth key
+- `RUSTDESK_PASSWORD` — the password the client types
+- `MAC_USER_PASSWORD` — password for the `cihelper` helper admin user
+
+Then: Actions → "macOS 15 Remote Control" → Run workflow. The grant is now
+automated, so after ~5 min the connection-info block prints and the operator
+connects via RustDesk client to `<tailscale-ip>:21118`.
+
+### Phase 2 / 3 — held in reserve
+Only needed if a future macOS image bumps SIP back on or re-introduces csreq
+validation. The `web_remote.py` manual fallback + the AI outer-loop design
+(artifact round-trip with cloud VLM) remain available behind `FALLBACK_WEB_REMOTE`.
 
 ---
 
-## 7. Open questions
+## 7. Open questions — answered by Phase 0
 
-1. Is SIP actually off on `macos-15`? (diagnostic answers this)
-2. Does `tccd` re-validate csreq on read, and if so does our compiled blob pass?
-3. Does RustDesk need a **first launch** to register itself in the Screen
-   Recording list before the TCC.db row is meaningful? (the diagnostic launches
-   it after the INSERT to test this)
-4. Does the GitHub `macos-15` runner still ship `hosted-compute-agent` +
-   `provisioner` pre-granted Screen Recording (so `screencapture` works)?
-5. Is there a Sequoia-specific `policy_id` / `flags` value the row needs?
-   (the diagnostic clones a known-good row's values to answer this)
+1. ✅ Is SIP actually off on `macos-15`? **YES — "System Integrity Protection status: disabled."**
+2. ✅ Does `tccd` re-validate csreq on read? **No** — the pre-granted entries have empty csreq, and our `csreq=NULL` row was honoured (AX toggle = ON).
+3. ✅ Does RustDesk need a first launch to register in the list? **No** — the TCC.db row alone puts RustDesk in the Screen Recording list (AX saw it after INSERT, before any RustDesk launch in step 8).
+4. ✅ Does the runner still pre-grant bash/hosted-compute-agent/provisioner? **YES** — all three present with auth_value=2. `screencapture` works (195 KB PNG captured).
+5. ✅ Sequoia-specific `policy_id`/`flags`? **policy_id=0, flags=0** (matches the pre-granted rows). `last_modified`/`boot_uuid`/`last_reminded` use SQLite defaults when NULL is inserted.
 
-Each of these is answerable from the Phase-0 artifact; no guessing required.
+### Remaining open question
+6. **Functional end-to-end**: does a RustDesk *client* actually receive a
+   non-black screen after this grant? The AX toggle=ON is conclusive at the OS
+   level, but the only 100%-proof test is a live client connection over
+   Tailscale — that's Phase 1b (needs the 3 secrets).
