@@ -150,6 +150,25 @@ the GitHub runner** (SIP is off per actions/runner-images#8162), and that the
 pre-granted entries carry **empty csreq blobs** so we don't need the fragile
 `csreq` compilation step at all — `csreq=NULL` matches the proven pattern.
 
+### Production granter — VERIFIED ✅✓✓ (grant-verify run 32999955251)
+
+`mac_grant_tcc.py` run end-to-end via `mac-grant-verify.yml` (no secrets):
+```
+"ax_results": {
+   "Screen Recording": "ON",      ← AX toggle confirmed ON (blue)
+   "Accessibility": "ON",          ← AX toggle confirmed ON (blue)
+   "Input Monitoring": "ON"        ← AX toggle confirmed ON (blue)
+}
+[grant][ OK ] ALL 3 services granted in TCC.db (auth_value=2).
+[grant]   AX-confirmed ON (toggle blue in System Settings):
+          Screen Recording, Accessibility, Input Monitoring
+```
+All three permissions RustDesk needs are granted **and** macOS's own
+accessibility tree confirms each toggle is ON. The Screen Recording grant
+(the one that caused the black screen) is solved. The whole permission
+pipeline is now a ~5-second `sqlite3 INSERT OR REPLACE` + `killall tccd` —
+no `osascript` AX clicking, no `ShowUI-2B`, no `web_remote.py`, no human.
+
 ---
 
 ## 6. Next actions
