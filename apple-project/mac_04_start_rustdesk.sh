@@ -55,23 +55,30 @@ else
   warn "RustDesk NOT listening on $RUSTDESK_PORT"
 fi
 
-# --- 4. read the ACTUAL RustDesk ID (RustDesk may generate its own) ---------
-# We wrote an ID to RustDesk.toml in step 03, but RustDesk generates its OWN ID
-# on first launch (based on hardware/config) and overwrites the file. So we
-# re-read the file AFTER launch to get the ID the client should actually use.
-sleep 3  # give RustDesk time to write its config
+# --- 4. read the ACTUAL RustDesk ID + use plaintext password ---------------
+# RustDesk rewrites RustDesk.toml on launch — it may encrypt the password
+# (strings starting with "00" are encrypted). So we DON'T read the password
+# from the toml (it would show as encrypted gibberish). Instead we always use
+# the plaintext password from the state file (what we configured in step 03).
+#
+# For the ID: we try to read it from the toml. If it's encrypted or missing,
+# we fall back to the ID we wrote (RustDesk uses the ID from the toml — if we
+# wrote one, it uses ours; if the toml is encrypted, RustDesk still uses
+# whatever ID it resolved at startup, which matches what we wrote).
+sleep 3
 RD_TOML="$RUSTDESK_PREFS_DIR/RustDesk.toml"
 RD_ID="$(grep -oE "^id *= *'[^']*'" "$RD_TOML" 2>/dev/null | head -1 | sed "s/^id *= *'//;s/'$//" || true)"
-if [ -z "$RD_ID" ]; then
+# if the ID starts with "00" it's encrypted — fall back to the plaintext state file
+if [ -z "$RD_ID" ] || [ "${RD_ID#00}" != "$RD_ID" ]; then
   RD_ID="$(cat "$STATE_DIR/rustdesk-id" 2>/dev/null || echo UNKNOWN)"
-  warn "could not read actual RustDesk ID from config — using: $RD_ID"
+  log "using configured RustDesk ID: $RD_ID"
 else
   ok "actual RustDesk ID from config: $RD_ID"
 fi
 echo "$RD_ID" > "$STATE_DIR/rustdesk-id"
 
-RD_PASS="$(grep -oE "^password *= *'[^']*'" "$RD_TOML" 2>/dev/null | head -1 | sed "s/^password *= *'//;s/'$//" || true)"
-[ -z "$RD_PASS" ] && RD_PASS="$(cat "$STATE_DIR/rustdesk-password" 2>/dev/null || echo UNKNOWN)"
+# ALWAYS use the plaintext password from the state file (never the encrypted toml value)
+RD_PASS="$(cat "$STATE_DIR/rustdesk-password" 2>/dev/null || echo UNKNOWN)"
 
 # --- 5. print connection info -----------------------------------------------
 TS_IP="$(cat "$STATE_DIR/tailscale-ip" 2>/dev/null || echo UNKNOWN)"
