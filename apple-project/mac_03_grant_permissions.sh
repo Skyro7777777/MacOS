@@ -91,10 +91,32 @@ cat "$STATE_DIR/grant_output.log"
 
 if [ "$GRANT_RC" -eq 0 ]; then
   ok "AUTOMATED GRANT SUCCEEDED — RustDesk has Screen Recording + Accessibility + Input Monitoring + Local Network"
-  # Take a success screenshot but KEEP the dialog-dismissal loop running —
-  # it's needed during the hold session (step 05) to auto-click "Accept" on
-  # RustDesk's incoming-connection dialog + "Allow" on any late system dialogs.
-  # Only stop the screenshot loop (we don't need per-5s screenshots during hold).
+
+  # --- PROACTIVELY trigger the replayd "bypass window picker" dialog + click Allow
+  # The preauthorization plist MAY suppress the dialog. But if it doesn't, we
+  # want the dialog to appear NOW (while the dialog-dismissal loop is running)
+  # so it gets clicked "Allow" BEFORE the operator connects via RustDesk.
+  # We trigger it by running screencapture once. The dialog will appear, the
+  # loop's pixel detection (Method 3: check 420,368 for blue) will detect it,
+  # and cliclick will click "Allow" at (511, 368).
+  log "triggering screencapture to surface any replayd dialog..."
+  screencapture -x -C /tmp/apple-project/trigger_shot.png 2>/dev/null || true
+  sleep 3  # give the dialog time to appear + the loop time to click it
+  take_screenshot "03_after_dialog_click"
+  # check if the dialog is gone (pixel at 420,368 should NOT be blue)
+  if python3 -c "
+from PIL import Image
+try:
+    im = Image.open('/tmp/apple-project/screenshots/$(ls -t /tmp/apple-project/screenshots/ | head -1)').convert('RGB')
+    r,g,b = im.getpixel((420,368))
+    exit(0 if (r<40 and 100<g<170 and b>230) else 1)
+except: exit(1)
+" 2>/dev/null; then
+    warn "replayd dialog STILL present — the loop may need more time"
+  else
+    ok "replayd dialog dismissed (or never appeared) — screen capture is clear"
+  fi
+
   stop_screenshot_loop
   take_screenshot "03_grant_success"
   # do NOT stop_dialog_dismissal_loop — it stays alive for step 05

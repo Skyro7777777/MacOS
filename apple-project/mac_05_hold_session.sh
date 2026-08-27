@@ -39,6 +39,23 @@ start_dialog_dismissal_loop
 # in the artifact if the operator reports an issue.
 SCREENSHOT_INTERVAL=30 start_screenshot_loop
 
+# --- start the web remote as an ALWAYS-ON manual fallback -------------------
+# RustDesk is the PRIMARY control method (fast, real-time). But if RustDesk
+# fails (black screen, "waiting for image", permission issues), the web remote
+# gives the operator a browser-based click-to-control fallback that uses
+# bash's pre-granted Screen Recording (the "responsible process" trick).
+# It runs on port 8080 — open http://<tailscale-ip>:8080/ in a browser.
+log "starting web remote on port 8080 (manual fallback)..."
+python3 "$PROJECT_ROOT/web_remote.py" 8080 &
+WEB_PID=$!
+log "web remote PID=$WEB_PID"
+sleep 2
+if kill -0 "$WEB_PID" 2>/dev/null; then
+  ok "web remote running on http://$(cat "$STATE_DIR/tailscale-ip" 2>/dev/null || echo '<ts-ip>'):8080"
+else
+  warn "web remote failed to start — RustDesk is the only control method"
+fi
+
 elapsed=0
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   if [ -f "$DONE_FLAG" ]; then
@@ -46,17 +63,18 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
     rm -f "$DONE_FLAG"
     stop_dialog_dismissal_loop
     stop_screenshot_loop
+    kill "$WEB_PID" 2>/dev/null || true
     exit 0
   fi
   # heartbeat every 30s (GitHub kills jobs that go 10+ min with no log output)
   if [ $((elapsed % 30)) -eq 0 ] && [ "$elapsed" -gt 0 ]; then
     remaining=$(( (DEADLINE - $(date +%s)) / 60 ))
-    # also check RustDesk is still listening
-    if port_open "$RUSTDESK_PORT"; then
-      log "still alive — ${remaining} min remaining  (RustDesk :$RUSTDESK_PORT OK, touch $DONE_FLAG to finish)"
-    else
-      warn "still alive — ${remaining} min remaining  (RustDesk NOT listening! — may need restart)"
-    fi
+    # check RustDesk + web remote status
+    rd_status="OK"
+    port_open "$RUSTDESK_PORT" || rd_status="NOT LISTENING"
+    web_status="OK"
+    kill -0 "$WEB_PID" 2>/dev/null || web_status="DEAD"
+    log "still alive — ${remaining} min remaining  (RustDesk:$rd_status, web:$web_status, touch $DONE_FLAG to finish)"
   fi
   sleep 1
   elapsed=$((elapsed + 1))
@@ -64,5 +82,6 @@ done
 
 stop_dialog_dismissal_loop
 stop_screenshot_loop
+kill "$WEB_PID" 2>/dev/null || true
 warn "hold timeout reached ($HOLD_MINUTES_INT min) — ending session"
 exit 0

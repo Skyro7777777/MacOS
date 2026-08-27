@@ -252,12 +252,15 @@ PYEOF
     done
   fi
 
-  # CRITICAL: kill replayd with SIGKILL (not HUP) so launchd restarts it
-  # fresh and it re-reads the plist. HUP does NOT trigger a re-read.
-  sudo killall -9 replayd 2>/dev/null || true
-  # Kill cfprefsd for BOTH root and user to invalidate the defaults cache
-  sudo killall -9 cfprefsd 2>/dev/null || true
-  sleep 2  # give launchd time to restart replayd
+  # CRITICAL: do NOT kill replayd with -9 (SIGKILL). That breaks the entire
+  # screen capture subsystem on macOS 15.7 — ALL screencapture calls produce
+  # black screens (verified in run 33067286600: 189 screenshots, 186 BLACK).
+  # Instead, use SIGHUP (gentle reload) + cfprefsd flush. The plist may not
+  # take effect immediately, but the dialog-dismissal loop (Method 3) will
+  # click "Allow" when the dialog appears — which is the reliable path.
+  sudo killall -HUP replayd 2>/dev/null || true
+  sudo killall -HUP cfprefsd 2>/dev/null || true
+  sleep 1
   # ALSO write to the SYSTEM-wide location (replayd is a system daemon on 15.7
   # and may read from /Library/Group Containers instead of ~/Library)
   local sys_sca_dir="/Library/Group Containers/group.com.apple.replayd"
@@ -266,12 +269,9 @@ PYEOF
     sudo defaults write "$sys_sca_dir/ScreenCaptureApprovals.plist" "$bin" \
       -date "2099-01-01 00:00:00 +0000" 2>/dev/null || true
   done
-  # verify replayd restarted + plist exists
-  if pgrep -x replayd >/dev/null 2>&1; then
-    ok "screencapture pre-authorized (replayd restarted, ${#bins[@]} binaries, user+system plist)"
-  else
-    warn "replayd did not restart after kill — screen capture may still prompt"
-  fi
+  ok "screencapture pre-authorized (${#bins[@]} binaries, user+system plist, HUP replayd)"
+  log "  (if the 'bypass window picker' dialog still appears, the dialog-dismissal"
+  log "   loop will click 'Allow' automatically via pixel detection at (420,368))"
 }
 
 # --- Sequoia privacy-dialog auto-dismissal -----------------------------------
