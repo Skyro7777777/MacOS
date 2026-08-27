@@ -227,6 +227,18 @@ api-server = ''
 direct-server = 'Y'
 direct-access-port = '${RUSTDESK_PORT}'
 verification-method = 'use-fixed-password'
+# Pre-grant ALL permissions so RustDesk does NOT show the "Accept incoming
+# connection?" dialog (which causes "waiting for image" if nobody clicks Accept).
+# With these set to Y + use-fixed-password, a correct-password connection
+# auto-accepts with full permissions — no dialog, no human, no delay.
+allow-clipboard = 'Y'
+allow-file-transfer = 'Y'
+allow-file-copy = 'Y'
+allow-audio = 'Y'
+allow-keyboard = 'Y'
+allow-mouse = 'Y'
+allow-restart = 'Y'
+allow-cam = 'Y'
 EOF
 ok "wrote $RUSTDESK_USER_PREFS/RustDesk2.toml ([options] subtable, direct-server=Y, no relay)"
 

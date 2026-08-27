@@ -215,3 +215,71 @@ validation. The `web_remote.py` manual fallback + the AI outer-loop design
    non-black screen after this grant? The AX toggle=ON is conclusive at the OS
    level, but the only 100%-proof test is a live client connection over
    Tailscale — that's Phase 1b (needs the 3 secrets).
+
+---
+
+## 8. Phase 1c — "waiting for image" fix  (2026-08-27)
+
+### Symptom
+After the live end-to-end test (run 33058073625), the user connected via
+RustDesk client, entered the password, and RustDesk said "Successful waiting
+for image..." — then hung forever. No screen frames reached the client.
+
+### Root cause (3 compounding bugs, found via VLM analysis of loop_092412.png)
+
+VLM analysis of the hold-session screenshots revealed THREE blocking dialogs
+on the Mac side, none of which were being handled correctly:
+
+1. **"Allow RustDesk to find devices on local networks?"** (macOS Local Network
+   privacy dialog). Cause: `kTCCServiceLocalNetwork` was NOT in the granter's
+   SERVICES list, so the dialog appeared on first RustDesk launch and blocked
+   everything until "Allow" was clicked.
+
+2. **RustDesk's "Accept incoming connection from Skyro7777777?"** dialog (with
+   the 8-permission grid). Cause: RustDesk2.toml did not pre-grant the
+   `allow-clipboard` / `allow-file-transfer` / `allow-keyboard` / etc.
+   options, so RustDesk asked the host-side operator to manually Accept each
+   incoming connection. Nobody clicked Accept (the operator is on the CLIENT
+   side, not the Mac side).
+
+3. **CRITICAL BUG in the dialog-dismissal loop**: the old `start_dialog_dismissal_loop`
+   in mac_lib.sh had TWO fatal flaws:
+   - **It clicked "Cancel"** via osascript — on RustDesk's incoming-connection
+     dialog, "Cancel" REJECTS the user's connection! This was actively killing
+     sessions.
+   - **It spammed a 50-click coordinate grid** (5×10 grid across the whole
+     screen every 2 seconds) — randomly hitting "Don't Allow", "Cancel", and
+     any other button at those coordinates, AND interfering with the
+     operator's mouse once they did connect.
+
+4. **Pink "Permissions/Configure" banner persisted** in RustDesk's own UI
+   even after the TCC.db grant succeeded. Cause: RustDesk caches its
+   permission-check result at launch; the granter's `launch_rustdesk()` used
+   `pkill` (SIGTERM) which let RustDesk clean up gracefully but sometimes
+   left a stale subprocess. The stale subprocess kept the cached "no permission"
+   state, so the pink banner persisted.
+
+5. **Dialog-dismissal loop stopped at end of step 03**. Each workflow step
+   runs in a separate shell, so the loop died when step 03 exited. Step 05
+   (the hold session) had no dialog dismissal — so any dialog that appeared
+   during the operator's session was never auto-clicked.
+
+### Fixes applied
+
+| Fix | File | What changed |
+|---|---|---|
+| Add Local Network | mac_grant_tcc.py | Added `kTCCServiceLocalNetwork` to SERVICES — pre-grants it in TCC.db so the "find devices" dialog never appears |
+| Pre-grant RustDesk perms | mac_02 + mac_03 | Added `allow-clipboard/file-transfer/file-copy/audio/keyboard/mouse/restart/cam = Y` to RustDesk2.toml — prevents the "Accept incoming connection?" dialog |
+| Fix dialog loop | mac_lib.sh | Removed the 50-click grid + "Cancel" clicking. Now clicks ONLY "Accept", "Allow", "Later", "Not Now" via osascript. For AX-invisible system dialogs, clicks ONE precise "Allow" position — but ONLY when a system-dialog process is frontmost (no random clicking) |
+| Clean RustDesk restart | mac_grant_tcc.py | Changed `pkill` → `pkill -9` (SIGKILL) + longer settle (8s) — ensures no stale subprocess keeps the cached "no permission" pink-banner state |
+| Loop runs during hold | mac_03 + mac_05 | Step 03 no longer stops the dialog loop (keeps it running). Step 05 starts its OWN dialog-dismissal loop at the beginning of the hold session (since each step is a separate shell). Also restarts a 30s screenshot loop for monitoring. |
+
+### Expected result
+After these fixes, connecting via RustDesk client should show the desktop
+immediately — no "waiting for image". The three blocking dialogs are either
+pre-granted (Local Network + RustDesk permissions) or auto-clicked by the
+safety-net dialog loop (Accept / Allow / Later only — never Cancel).
+
+### Repo reorganization
+All project scripts moved from repo root into `apple-project/` folder for
+cleanliness. Workflows updated to `bash apple-project/mac_XX_*.sh`.

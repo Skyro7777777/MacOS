@@ -52,6 +52,15 @@ api-server = ''
 direct-server = 'Y'
 direct-access-port = '${RUSTDESK_PORT}'
 verification-method = 'use-fixed-password'
+# Pre-grant ALL permissions — no "Accept incoming connection?" dialog
+allow-clipboard = 'Y'
+allow-file-transfer = 'Y'
+allow-file-copy = 'Y'
+allow-audio = 'Y'
+allow-keyboard = 'Y'
+allow-mouse = 'Y'
+allow-restart = 'Y'
+allow-cam = 'Y'
 EOF
 sudo mkdir -p /var/root/Library/Preferences/com.carriez.RustDesk
 sudo cp "$RUSTDESK_USER_PREFS/RustDesk.toml" "$RUSTDESK_USER_PREFS/RustDesk2.toml" \
@@ -77,10 +86,15 @@ set -e
 cat "$STATE_DIR/grant_output.log"
 
 if [ "$GRANT_RC" -eq 0 ]; then
-  ok "AUTOMATED GRANT SUCCEEDED — RustDesk has Screen Recording + Accessibility + Input Monitoring"
+  ok "AUTOMATED GRANT SUCCEEDED — RustDesk has Screen Recording + Accessibility + Input Monitoring + Local Network"
+  # Take a success screenshot but KEEP the dialog-dismissal loop running —
+  # it's needed during the hold session (step 05) to auto-click "Accept" on
+  # RustDesk's incoming-connection dialog + "Allow" on any late system dialogs.
+  # Only stop the screenshot loop (we don't need per-5s screenshots during hold).
   stop_screenshot_loop
-  stop_dialog_dismissal_loop
   take_screenshot "03_grant_success"
+  # do NOT stop_dialog_dismissal_loop — it stays alive for step 05
+  log "dialog-dismissal loop kept running for the hold session (step 05)"
   exit 0
 fi
 

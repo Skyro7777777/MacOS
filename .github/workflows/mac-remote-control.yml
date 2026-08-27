@@ -28,22 +28,22 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Step 00 — provision helper admin user
-        run: bash mac_00_setup_user.sh
+        run: bash apple-project/mac_00_setup_user.sh
 
       - name: Step 01 — install + connect Tailscale
-        run: bash mac_01_install_tailscale.sh
+        run: bash apple-project/mac_01_install_tailscale.sh
 
       - name: Step 02 — install + configure RustDesk (direct-IP, no relay)
-        run: bash mac_02_install_rustdesk.sh
+        run: bash apple-project/mac_02_install_rustdesk.sh
 
       - name: Step 03 — grant TCC permissions (AUTOMATED)
-        run: bash mac_03_grant_permissions.sh
+        run: bash apple-project/mac_03_grant_permissions.sh
 
       - name: Step 04 — verify RustDesk is listening + print connection info
-        run: bash mac_04_start_rustdesk.sh
+        run: bash apple-project/mac_04_start_rustdesk.sh
 
       - name: Step 05 — hold session open for remote control
-        run: bash mac_05_hold_session.sh
+        run: bash apple-project/mac_05_hold_session.sh
 
       - name: Upload screenshots + logs (always)
         if: always()

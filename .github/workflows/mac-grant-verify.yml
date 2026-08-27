@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'mac_grant_tcc.py'
+      - 'apple-project/mac_grant_tcc.py'
       - '.github/workflows/mac-grant-verify.yml'
 
 # Verifies the production TCC granter end-to-end WITHOUT needing Tailscale or
@@ -47,7 +47,7 @@ jobs:
 
       - name: Run the production TCC granter
         run: |
-          sudo python3 mac_grant_tcc.py 2>&1 | tee /tmp/grant.log
+          sudo python3 apple-project/mac_grant_tcc.py 2>&1 | tee /tmp/grant.log
         continue-on-error: true
 
       - name: Capture verification screenshots of all 3 panes

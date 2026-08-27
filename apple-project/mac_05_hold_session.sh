@@ -27,21 +27,42 @@ log "(or until you create the done-flag:  touch $DONE_FLAG)"
 # remove any stale flag
 rm -f "$DONE_FLAG"
 
+# --- restart the dialog-dismissal loop for the hold session ----------------
+# Each workflow step runs in a separate shell, so the loop from step 03 died
+# when step 03 exited. We restart it here so "Accept" / "Allow" dialogs are
+# auto-clicked while the operator is connected.
+# CRITICAL: this loop clicks ONLY "Accept", "Allow", "Later", "Not Now" —
+# it NEVER clicks "Cancel" or "Don't Allow" (which would reject the connection).
+start_dialog_dismissal_loop
+
+# Also take a periodic screenshot (every 30s) so we can see the desktop state
+# in the artifact if the operator reports an issue.
+SCREENSHOT_INTERVAL=30 start_screenshot_loop
+
 elapsed=0
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   if [ -f "$DONE_FLAG" ]; then
     ok "done-flag detected — ending session cleanly"
     rm -f "$DONE_FLAG"
+    stop_dialog_dismissal_loop
+    stop_screenshot_loop
     exit 0
   fi
   # heartbeat every 30s (GitHub kills jobs that go 10+ min with no log output)
   if [ $((elapsed % 30)) -eq 0 ] && [ "$elapsed" -gt 0 ]; then
     remaining=$(( (DEADLINE - $(date +%s)) / 60 ))
-    log "still alive — ${remaining} min remaining  (touch $DONE_FLAG to finish)"
+    # also check RustDesk is still listening
+    if port_open "$RUSTDESK_PORT"; then
+      log "still alive — ${remaining} min remaining  (RustDesk :$RUSTDESK_PORT OK, touch $DONE_FLAG to finish)"
+    else
+      warn "still alive — ${remaining} min remaining  (RustDesk NOT listening! — may need restart)"
+    fi
   fi
   sleep 1
   elapsed=$((elapsed + 1))
 done
 
+stop_dialog_dismissal_loop
+stop_screenshot_loop
 warn "hold timeout reached ($HOLD_MINUTES_INT min) — ending session"
 exit 0

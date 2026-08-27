@@ -63,22 +63,30 @@ defence-in-depth):
 
 ---
 
-## Repo layout (paste these at the root of your GitHub repo)
+## Repo layout
 
 ```
-The_Apple_Project/
+MacOS/
 ├── .github/workflows/
-│   └── mac-remote-control.yml        # the only workflow — runs on macos-15
-├── mac_lib.sh                        # shared shell helpers (sourcing library)
-├── mac_00_setup_user.sh              # create helper admin user (known password)
-├── mac_01_install_tailscale.sh       # download .pkg, verify SHA256, connect
-├── mac_02_install_rustdesk.sh        # install RustDesk, write direct-IP config
-├── mac_03_grant_permissions.sh       # THE pipeline: sqlite3 -> osascript -> ShowUI
-├── mac_grant_permissions.applescript # deterministic AX click-through
-├── mac_showui_agent.py               # local ShowUI-2B vision agent (fallback)
-├── mac_04_start_rustdesk.sh          # launch in GUI session, verify port 21118
-├── mac_05_hold_session.sh            # keep job alive until done-flag or timeout
-├── mac_requirements.txt              # Python deps for the ShowUI agent
+│   ├── mac-remote-control.yml        # the main workflow — runs on macos-15
+│   ├── mac-grant-verify.yml          # no-secrets proof of the TCC granter
+│   └── mac-diagnose.yml              # no-secrets ground-truth diagnostic
+├── apple-project/                     # all scripts for this project
+│   ├── mac_lib.sh                    # shared shell helpers (sourcing library)
+│   ├── mac_00_setup_user.sh          # create helper admin user (known password)
+│   ├── mac_01_install_tailscale.sh   # install + connect Tailscale
+│   ├── mac_02_install_rustdesk.sh    # install RustDesk, write direct-IP config
+│   ├── mac_03_grant_permissions.sh   # THE granter: sqlite3 TCC.db write (no UI!)
+│   ├── mac_grant_tcc.py              # production TCC granter (pure sqlite3, AX-verify)
+│   ├── mac_diagnose.py               # ground-truth diagnostic (no secrets)
+│   ├── mac_04_start_rustdesk.sh      # launch in GUI session, verify port 21118
+│   ├── mac_05_hold_session.sh        # keep job alive + dialog-dismissal loop
+│   ├── mac_grant_permissions.applescript  # (legacy) deterministic AX click-through
+│   ├── mac_vision_agent.py           # (legacy) Apple Vision OCR + AX fallback
+│   ├── mac_tgpt_agent.py             # (legacy) TCC.db + AX fallback
+│   ├── web_remote.py                 # (fallback) manual browser click control
+│   ├── mac_requirements.txt          # Python deps
+│   └── LIVING_PLAN.md                # living plan + debug log
 ├── docs/
 │   ├── CONNECT_WINDOWS.md            # step-by-step from a Windows 11 client
 │   └── CONNECT_ANDROID.md            # step-by-step from an Android client

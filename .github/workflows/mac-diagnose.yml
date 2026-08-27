@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'mac_diagnose.py'
+      - 'apple-project/mac_diagnose.py'
       - '.github/workflows/mac-diagnose.yml'
 
 jobs:
@@ -28,7 +28,7 @@ jobs:
 
       - name: Run diagnostic
         run: |
-          python3 mac_diagnose.py
+          python3 apple-project/mac_diagnose.py
 
       - name: Upload diagnostic artifacts
         if: always()

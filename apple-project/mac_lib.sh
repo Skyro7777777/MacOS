@@ -256,25 +256,38 @@ PYEOF
 }
 
 # --- Sequoia privacy-dialog auto-dismissal -----------------------------------
-# macOS 15 (Sequoia) added a NEW privacy prompt ON TOP of TCC:
-#   "[app] is requesting to bypass the system private window picker and
-#    directly access your screen and audio."
-# This appears even when the app HAS Screen Recording TCC permission.  It has
-# an "Allow" button and an "Open System Settings" button.  Since the operator
-# can't click it (they're not connected yet — chicken-and-egg), we auto-click
-# "Allow" via cliclick by screen coordinates.
+# macOS 15 (Sequoia) shows several modal dialogs that block RustDesk from
+# sending screen frames to the client (causing "waiting for image" forever):
 #
-# CRITICAL: on macOS 15.4+, system dialogs HIDE their AXUIElements from
-# System Events (the buttons are visible on screen but AX-invisible), so
-# osascript `click button "Allow"` silently does nothing.  We use cliclick
-# by screen coordinates instead — CGEventPost bypasses the AX-visibility bug.
-# osascript is kept as a secondary method (works on macOS < 15.4).
+#   1. "Allow RustDesk to find devices on local networks?"  [system, AX-invisible]
+#      -> Needs "Allow" (right button). Pre-granted via TCC.db Local Network,
+#         but this loop is the safety net.
 #
-# This background loop runs every 2s and dies with the parent shell (like the
-# screenshot loop).
+#   2. "[app] is requesting to bypass the system private window picker..." [replayd]
+#      -> Needs "Allow". Pre-suppressed via preauthorize_screencapture plist,
+#         but this loop is the safety net.
+#
+#   3. RustDesk's own "Accept incoming connection from <user>?" [RustDesk app]
+#      -> Needs "Accept". Pre-suppressed by allow-* options in RustDesk2.toml,
+#         but this loop is the safety net.
+#
+# CRITICAL DESIGN RULES (learned from the "waiting for image" bug):
+#   * NEVER click "Cancel" or "Don't Allow" -- on RustDesk's incoming-connection
+#     dialog, "Cancel" REJECTS the user's connection (the #1 cause of stuck sessions).
+#   * NEVER click a coordinate grid -- it randomly hits "Don't Allow" / "Cancel"
+#     and interferes with the operator's mouse once they connect.
+#   * DO click "Accept", "Allow", "Later", "Not Now" via osascript (these are
+#     safe -- they never reject a connection or deny a permission).
+#   * For AX-invisible SYSTEM dialogs (macOS 15.4+), click ONE precise position
+#     for "Allow" (right button of centered dialog) -- but ONLY when a system
+#     dialog process is detected, to avoid random clicking.
 
 DIALOG_DISMISS_PID=""
 export DIALOG_DISMISS_PID
+
+# System dialog processes that indicate an AX-invisible dialog is on screen
+# (on macOS 15.4+ these hide their buttons from System Events)
+_SYSTEM_DIALOG_PROCS="UserAccessAgent|CoreServicesUIAgent|nesessionmanager|usernotificationsd|loginwindow"
 
 start_dialog_dismissal_loop() {
   # don't start twice in the same shell
@@ -283,32 +296,9 @@ start_dialog_dismissal_loop() {
   fi
   (
     while true; do
-      # On macOS 15.4+, system dialogs HIDE their AXUIElements from System Events
-      # (the buttons are visible on screen but AX-invisible). So osascript
-      # `click button "Allow"` silently does nothing.
-      #
-      # FIX: use cliclick to click the "Allow" button by SCREEN COORDINATES.
-      # The "bypass window picker" dialog is always centered. The "Allow"
-      # button is the LEFT button, roughly 40% from the left edge of the dialog.
-      # On a 1024x768 screen: dialog center ~512,384; Allow button ~412,429.
-      # We click a few candidate positions to handle varying dialog sizes.
-      #
-      # cliclick uses CGEventPost which bypasses the AX-visibility bug.
-      if command -v cliclick >/dev/null 2>&1; then
-        # Click BOTH the LEFT and RIGHT buttons of centered dialogs.
-        # Different dialogs put "Allow" on different sides:
-        #   - "bypass window picker": Allow is LEFT (~412,429)
-        #   - "find devices on local networks": Allow is RIGHT (~612,400)
-        # We click a grid covering both sides to handle all variants.
-        for y in 429 400 384 350 450; do
-          for x in 412 380 440 350 470 512 550 580 612 640; do
-            cliclick c:"$x","$y" 2>/dev/null || true
-          done
-        done
-      fi
-      # ALSO try osascript as a secondary method (works on macOS < 15.4)
-      # Handle: "Allow*" buttons, "Don't Allow" (RustDesk network dialog),
-      # "Cancel" (AppleCare sign-in dialog), "Not Now" (any nag dialog)
+      # --- Method 1: osascript -- click safe buttons by NAME -----------------
+      # Works for: RustDesk "Accept", "Allow" on macOS <15.4, "Later", "Not Now"
+      # Does NOT click "Cancel" or "Don't Allow" (those reject connections/perms)
       osascript -e '
         try
           tell application "System Events"
@@ -318,20 +308,21 @@ start_dialog_dismissal_loop() {
                   repeat with b in (every button of w)
                     try
                       set bName to name of b as text
-                      -- click Allow / Allow For One Month / Allow For One Day
                       if bName starts with "Allow" then
                         click b
-                        return "dismissed:" & bName
+                        return "dismissed:" & bName & " in " & (name of p as text)
                       end if
-                      -- dismiss "Sign In to View AppleCare" by clicking Cancel
-                      if bName is "Cancel" then
+                      if bName is "Accept" then
                         click b
-                        return "dismissed:Cancel"
+                        return "dismissed:" & bName & " in " & (name of p as text)
                       end if
-                      -- dismiss "Not Now" nag dialogs
+                      if bName is "Later" then
+                        click b
+                        return "dismissed:" & bName & " in " & (name of p as text)
+                      end if
                       if bName is "Not Now" then
                         click b
-                        return "dismissed:Not Now"
+                        return "dismissed:" & bName & " in " & (name of p as text)
                       end if
                     end try
                   end repeat
@@ -341,12 +332,28 @@ start_dialog_dismissal_loop() {
           end tell
         end try
       ' 2>/dev/null || true
-      sleep 2
+
+      # --- Method 2: cliclick -- ONE precise click for AX-invisible dialogs --
+      # Only fires when a known system-dialog process is frontmost, to avoid
+      # random clicking when the operator is controlling the desktop.
+      # The "Allow" button on a centered system dialog is the RIGHT button,
+      # roughly 60% from the left edge of the dialog (~612,400 on 1024x768).
+      if command -v cliclick >/dev/null 2>&1; then
+        front_proc="$(osascript -e 'tell application "System Events" to return name of first application process whose frontmost is true' 2>/dev/null || echo '')"
+        if echo "$front_proc" | grep -qE "$_SYSTEM_DIALOG_PROCS"; then
+          # System dialog is frontmost -- click "Allow" (right button)
+          cliclick c:612,400 2>/dev/null || true
+          sleep 0.5
+          cliclick c:612,430 2>/dev/null || true
+        fi
+      fi
+      sleep 3
     done
   ) &
   DIALOG_DISMISS_PID=$!
   disown 2>/dev/null || true
-  log "🤖 dialog-dismissal loop started (PID=$DIALOG_DISMISS_PID, interval=2s, cliclick+osascript)"
+  log "dialog-dismissal loop started (PID=$DIALOG_DISMISS_PID, interval=3s)"
+  log "  clicks: Allow, Accept, Later, Not Now (NEVER Cancel / Don't Allow)"
 }
 
 stop_dialog_dismissal_loop() {
@@ -354,6 +361,6 @@ stop_dialog_dismissal_loop() {
     kill "$DIALOG_DISMISS_PID" 2>/dev/null || true
     wait "$DIALOG_DISMISS_PID" 2>/dev/null || true
     DIALOG_DISMISS_PID=""
-    log "🤖 dialog-dismissal loop stopped"
+    log "dialog-dismissal loop stopped"
   fi
 }

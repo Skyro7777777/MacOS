@@ -66,6 +66,11 @@ SERVICES = [
      "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility"),
     ("kTCCServiceListenEvent", "Input Monitoring",
      "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ListenEvent"),
+    # Local Network — prevents the "Allow RustDesk to find devices on local
+    # networks?" dialog that blocks the first connection (causes "waiting for
+    # image"). On SIP-off runner this is writable just like the others.
+    ("kTCCServiceLocalNetwork", "Local Network",
+     "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_LocalNetwork"),
 ]
 
 AX_VERIFY = os.environ.get("AX_VERIFY", "1") != "0"
@@ -276,14 +281,21 @@ def ax_verify(service_url: str) -> str:
 # ---------------------------------------------------------------- RustDesk launch
 def launch_rustdesk():
     """Launch RustDesk so it self-registers in the privacy lists and picks up
-    the grants. Idempotent."""
+    the grants. Uses SIGKILL (not SIGTERM) to ensure a fully clean restart —
+    RustDesk caches its "no Screen Recording permission" state at launch and
+    only re-checks on a cold start, so a lingering process with stale state
+    would keep showing the pink "Permissions/Configure" banner."""
     if not Path(RUSTDESK_BIN).exists():
         return False
-    # kill any stale instance, then launch fresh in the GUI session
-    run(["pkill", "-x", "RustDesk"])
+    # SIGKILL any existing instance (pkill -9 = force, -x = exact name match)
+    run(["pkill", "-9", "-x", "RustDesk"])
+    time.sleep(3)
+    # also kill the --server subprocess if present
+    run(["pkill", "-9", "-f", "RustDesk.*--server"])
     time.sleep(2)
+    # relaunch fresh in the GUI session
     run(["open", "-a", "RustDesk"])
-    time.sleep(7)  # give it time to register + check permissions
+    time.sleep(8)  # give it time to register + re-check permissions
     return True
 
 
