@@ -94,7 +94,7 @@ export URL_SCREEN_CAPTURE URL_ACCESSIBILITY URL_INPUT_MONITORING URL_FULL_DISK
 # --- RustDesk constants -----------------------------------------------------
 RUSTDESK_APP="/Applications/RustDesk.app"
 RUSTDESK_BIN="$RUSTDESK_APP/Contents/MacOS/RustDesk"
-RUSTDESK_BUNDLE="com.carriez.RustDesk"
+RUSTDESK_BUNDLE="com.carriez.rustdesk"  # MUST be lowercase — matches CFBundleIdentifier + codesign
 RUSTDESK_PREFS_DIR="/Users/$RUNNER_USER/Library/Preferences/com.carriez.RustDesk"
 RUSTDESK_PORT="21118"
 export RUSTDESK_APP RUSTDESK_BIN RUSTDESK_BUNDLE RUSTDESK_PREFS_DIR RUSTDESK_PORT

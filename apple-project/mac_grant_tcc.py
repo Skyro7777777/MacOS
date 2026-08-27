@@ -56,7 +56,7 @@ from pathlib import Path
 TCC_DB = "/Library/Application Support/com.apple.TCC/TCC.db"
 RUSTDESK_APP = "/Applications/RustDesk.app"
 RUSTDESK_BIN = f"{RUSTDESK_APP}/Contents/MacOS/RustDesk"
-RUSTDESK_BUNDLE = "com.carriez.RustDesk"
+RUSTDESK_BUNDLE = "com.carriez.rustdesk"  # MUST be lowercase — matches CFBundleIdentifier + codesign
 
 # (service, pane deep-link URL, friendly name)
 SERVICES = [
@@ -114,13 +114,13 @@ def get_columns() -> list[str]:
     return cols
 
 
-def value_for_column(col: str) -> str:
+def value_for_column(col: str, client: str = None, client_type: str = "0") -> str:
     """SQL literal for each known column. NULL for anything we don't care about
     (SQLite substitutes the column default for NOT NULL-with-default cols)."""
     m = {
         "service": f"'kTCCServiceScreenCapture'",  # replaced per-service below
-        "client": f"'{RUSTDESK_BUNDLE}'",
-        "client_type": "0",
+        "client": f"'{client}'" if client else f"'{RUSTDESK_BUNDLE}'",
+        "client_type": client_type,
         "auth_value": "2",          # allowed
         "auth_reason": "4",         # system set
         "auth_version": "1",
@@ -141,16 +141,30 @@ def grant_service(service: str) -> dict:
         res["error"] = "could not read TCC.db schema"
         return res
 
-    # build INSERT OR REPLACE
     col_list = ",".join(cols)
-    val_list = ",".join(value_for_column(c).replace("'kTCCServiceScreenCapture'", f"'{service}'") for c in cols)
-    sql = f"INSERT OR REPLACE INTO access ({col_list}) VALUES ({val_list});"
 
-    rc, out, err = sudo(["sqlite3", TCC_DB, sql])
-    res["steps"]["insert"] = {"rc": rc, "err": err[:300]}
-    if rc != 0:
-        res["error"] = f"INSERT failed: {err[:200]}"
-        return res
+    # BELT AND SUSPENDERS: write TWO rows per service:
+    #  1. Bundle ID (client_type=0) — what System Settings displays
+    #  2. Binary path (client_type=1) — what tccd may check at runtime
+    #     (matches the pre-granted bash/hosted-compute-agent/provisioner pattern)
+    # Both use the CORRECT lowercase bundle ID: com.carriez.rustdesk
+    clients = [
+        (RUSTDESK_BUNDLE, "0"),          # bundle ID
+        (RUSTDESK_BIN, "1"),             # binary path (client_type=1)
+    ]
+
+    insert_results = []
+    for client, ctype in clients:
+        val_list = ",".join(
+            value_for_column(c, client=client, client_type=ctype)
+            .replace("'kTCCServiceScreenCapture'", f"'{service}'")
+            for c in cols
+        )
+        sql = f"INSERT OR REPLACE INTO access ({col_list}) VALUES ({val_list});"
+        rc, out, err = sudo(["sqlite3", TCC_DB, sql])
+        insert_results.append({"client": client, "client_type": ctype, "rc": rc, "err": err[:200]})
+
+    res["steps"]["inserts"] = insert_results
 
     # restart tccd so it re-reads the DB
     rc, _, err = sudo(["killall", "tccd"])
