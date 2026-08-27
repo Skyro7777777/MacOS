@@ -178,29 +178,19 @@ fi
 # strip quarantine attribute regardless of install method
 xattr -dr com.apple.quarantine "$RUSTDESK_APP" 2>/dev/null || true
 
+# install displayplacer (for setting 1920x1080 resolution in step 04)
+if ! command -v displayplacer >/dev/null 2>&1; then
+  brew install displayplacer 2>&1 | tail -n1
+fi
+
 [ -x "$RUSTDESK_BIN" ] || die "RustDesk binary not present at $RUSTDESK_BIN after install"
 ok "RustDesk installed: $($RUSTDESK_BIN --version 2>/dev/null || echo 'unknown version')"
 
-# CRITICAL: pre-authorize screencapture BEFORE taking any screenshots.
-# macOS 15 Sequoia shows a blocking "bypass the system private window picker"
-# dialog the first time a process captures the screen.  This dialog blocks
-# our ShowUI-2B AI agent (which needs screencapture to see the screen) and
-# also blocks the screenshot loop.  Pre-authorizing writes the binaries into
-# ScreenCaptureApprovals.plist with far-future dates so replayd never shows
-# the dialog.
+# pre-authorize screencapture (suppresses the replayd "bypass window picker" dialog)
 preauthorize_screencapture
-
-# Start periodic screenshot capture NOW — we want to see the desktop during
-# config write, plist install, and the TCC registration launch in step 03.
-# (Safe now that screencapture is pre-authorized.)
-start_screenshot_loop
 take_screenshot "02_after_rustdesk_install"
 
 # --- 2. write RustDesk.toml (id + password) ---------------------------------
-# RustDesk.toml holds the peer ID and the permanent password.
-# We write PLAINTEXT — RustDesk's `decrypt_str_or_original` treats any string
-# not starting with "00" as plaintext and re-encrypts on next save.  This
-# avoids the broken `--password` CLI (which requires root).
 RUSTDESK_ID="${RUSTDESK_ID:-$(date +%s | tail -c 9)}"
 RUSTDESK_USER_PREFS="/Users/$RUNNER_USER/Library/Preferences/com.carriez.RustDesk"
 sudo -u "$RUNNER_USER" mkdir -p "$RUSTDESK_USER_PREFS"

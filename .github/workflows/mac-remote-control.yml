@@ -7,10 +7,6 @@ on:
         description: "How long to keep the session alive (minutes, max 235)"
         required: false
         default: "120"
-      fallback_web_remote:
-        description: "If automated grant fails, start manual web remote (0/1)"
-        required: false
-        default: "0"
 
 jobs:
   remote-control:
@@ -18,7 +14,6 @@ jobs:
     timeout-minutes: 240
     env:
       HOLD_MINUTES: ${{ inputs.hold_minutes }}
-      FALLBACK_WEB_REMOTE: ${{ inputs.fallback_web_remote }}
       TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
       RUSTDESK_PASSWORD: ${{ secrets.RUSTDESK_PASSWORD }}
       MAC_USER_PASSWORD: ${{ secrets.MAC_USER_PASSWORD }}
@@ -39,20 +34,19 @@ jobs:
       - name: Step 03 — grant TCC permissions (AUTOMATED)
         run: bash apple-project/mac_03_grant_permissions.sh
 
-      - name: Step 04 — verify RustDesk is listening + print connection info
+      - name: Step 04 — set 1920x1080 + verify RustDesk + print connection info
         run: bash apple-project/mac_04_start_rustdesk.sh
 
       - name: Step 05 — hold session open for remote control
         run: bash apple-project/mac_05_hold_session.sh
 
-      - name: Upload screenshots + logs (always)
+      - name: Upload logs (always)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mac-remote-session
+          name: mac-session-logs
           path: |
-            /tmp/apple-project/screenshots/
             /tmp/apple-project/grant_output.log
             /tmp/apple-project/connection-info.txt
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 3

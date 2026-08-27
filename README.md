@@ -63,35 +63,30 @@ defence-in-depth):
 
 ---
 
-## Repo layout
+## Repo layout (minimal — 9 files)
 
 ```
 MacOS/
 ├── .github/workflows/
-│   ├── mac-remote-control.yml        # the main workflow — runs on macos-15
-│   ├── mac-grant-verify.yml          # no-secrets proof of the TCC granter
-│   └── mac-diagnose.yml              # no-secrets ground-truth diagnostic
-├── apple-project/                     # all scripts for this project
-│   ├── mac_lib.sh                    # shared shell helpers (sourcing library)
+│   └── mac-remote-control.yml        # the only workflow — runs on macos-15
+├── apple-project/                     # all scripts for this project (9 files)
+│   ├── mac_lib.sh                    # shared helpers + dialog auto-dismissal
 │   ├── mac_00_setup_user.sh          # create helper admin user (known password)
 │   ├── mac_01_install_tailscale.sh   # install + connect Tailscale
-│   ├── mac_02_install_rustdesk.sh    # install RustDesk, write direct-IP config
-│   ├── mac_03_grant_permissions.sh   # THE granter: sqlite3 TCC.db write (no UI!)
-│   ├── mac_grant_tcc.py              # production TCC granter (pure sqlite3, AX-verify)
-│   ├── mac_diagnose.py               # ground-truth diagnostic (no secrets)
-│   ├── mac_04_start_rustdesk.sh      # launch in GUI session, verify port 21118
+│   ├── mac_02_install_rustdesk.sh    # install RustDesk + displayplacer
+│   ├── mac_03_grant_permissions.sh   # THE granter: sqlite3 TCC.db + dialog handling
+│   ├── mac_grant_tcc.py              # pure-sqlite3 TCC granter (no UI, no AI)
+│   ├── mac_04_start_rustdesk.sh      # set 1920x1080 + verify + read actual RustDesk ID
 │   ├── mac_05_hold_session.sh        # keep job alive + dialog-dismissal loop
-│   ├── mac_grant_permissions.applescript  # (legacy) deterministic AX click-through
-│   ├── mac_vision_agent.py           # (legacy) Apple Vision OCR + AX fallback
-│   ├── mac_tgpt_agent.py             # (legacy) TCC.db + AX fallback
-│   ├── web_remote.py                 # (fallback) manual browser click control
-│   ├── mac_requirements.txt          # Python deps
 │   └── LIVING_PLAN.md                # living plan + debug log
 ├── docs/
-│   ├── CONNECT_WINDOWS.md            # step-by-step from a Windows 11 client
-│   └── CONNECT_ANDROID.md            # step-by-step from an Android client
-└── README.md                         # this file
+│   ├── CONNECT_WINDOWS.md
+│   └── CONNECT_ANDROID.md
+└── README.md
 ```
+
+To add this project to another repo, just copy the `apple-project/` folder +
+`.github/workflows/mac-remote-control.yml`. That's it — 10 files total.
 
 ---
 
@@ -162,54 +157,49 @@ walkthroughs.
 
 ---
 
-## How the permission pipeline works (deep dive)
+## How it works (deep dive)
 
-`mac_03_grant_permissions.sh` runs for each of three TCC services:
+The GitHub `macos-15` runner ships with **SIP disabled** (actions/runner-images#8162),
+so the system TCC.db is root-writable. The pre-granted `bash`/`hosted-compute-agent`/
+`provisioner` entries all carry **empty csreq blobs**, so tccd doesn't validate
+csreq on this image. `mac_grant_tcc.py` mirrors that pattern.
 
-| Service | TCC key | Pane deep-link |
-|---|---|---|
-| Screen Recording | `kTCCServiceScreenCapture` | `x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture` |
-| Accessibility | `kTCCServiceAccessibility` | `…?Privacy_Accessibility` |
-| Input Monitoring | `kTCCServiceListenEvent` | `…?Privacy_ListenEvent` |
+### The permission pipeline (mac_03)
 
-For each, it tries the layers in order and stops at the first success:
+1. **Install deps**: `cliclick` (for clicking), `Pillow` (for dialog pixel detection)
+2. **Install + configure RustDesk**: direct-IP mode, pre-grant all RustDesk-side
+   permissions (`allow-clipboard`, `allow-keyboard`, etc.) so no "Accept incoming
+   connection?" dialog
+3. **Pre-authorize screencapture**: writes far-future dates to
+   `ScreenCaptureApprovals.plist` (user + system) to suppress the replayd
+   "bypass window picker" dialog
+4. **Grant TCC permissions** (`mac_grant_tcc.py`): pure sqlite3 `INSERT OR REPLACE`
+   for all 4 services (Screen Recording + Accessibility + Input Monitoring + Local
+   Network). Writes the CORRECT lowercase bundle ID `com.carriez.rustdesk` +
+   the binary path (belt-and-suspenders). `killall tccd` to re-read.
+5. **Trigger + wait for dialog dismissal**: runs `screencapture` once to surface
+   the replayd dialog, then waits up to 120s for the dialog-dismissal loop to click
+   "Allow" (resolution-independent pixel scan finds the blue button)
+6. **Restart RustDesk**: `pkill -9` + relaunch — this is critical because RustDesk
+   caches its permission check at launch. If it launched before the dialog was
+   dismissed, it cached "no permission" → pink banner forever.
 
-### Layer 1 — `sqlite3` INSERT
-- Extracts RustDesk's designated code requirement via `codesign -d -r-`.
-- Compiles it to a binary blob with `csreq`, hex-encodes it.
-- Introspects the live `access` table schema (`PRAGMA table_info`) and builds a
-  matching `INSERT OR REPLACE` so it never fails on a missing column.
-- `sudo killall tccd` to force a re-read.
-- **Outcome:** usually works for Accessibility; often silently rejected for
-  ScreenCapture on Sequoia (tccd validates `csreq`). We accept that and move on.
+### The dialog-dismissal loop (mac_lib.sh)
 
-### Layer 2 — `osascript` click-through (`mac_grant_permissions.applescript`)
-- Opens the pane by deep-link URL.
-- Waits for the System Settings window.
-- **Recursively** walks the AX tree (`findSwitchForApp`) looking for an
-  `AXGroup`/`AXRow` that contains *both* an `AXSwitch` and a matching
-  `AXStaticText`. This is robust against minor hierarchy drift.
-- Reads the switch value; if `0`, clicks it (set value, fallback to `click`).
-- Dismisses the "Quit & Reopen" sheet by clicking **Later**.
-- Returns `GRANTED` / `ALREADY_ON` / `NOT_IN_LIST` / `ERROR`.
-- **Outcome:** works whenever RustDesk is already in the list (it registers
-  itself the first time it tries to capture the screen). Fails only if the `+`
-  file-picker needs driving — that's the AI's job.
+Runs during the hold session (step 05) to catch any late dialogs:
+- **Method 1**: `osascript` clicks buttons named "Accept", "Allow", "Later", "Not Now"
+  (NEVER "Cancel" / "Don't Allow" — those reject connections)
+- **Method 2**: resolution-independent pixel scan — takes a screenshot, scans the
+  screen center for macOS accent-blue (#0A84FF) pixels, finds the "Allow" button's
+  bounding box, clicks its center. Works at any resolution (1024×768 or 1920×1080).
 
-### Layer 3 — ShowUI-2B local vision agent (`mac_showui_agent.py`)
-- Installs `cliclick` + `transformers` + `torch` + `qwen-vl-utils` if missing.
-- Loads `showlab/ShowUI-2B` (~4.2 GB) on MPS (fp16) — runs entirely locally,
-  **no API key, no OpenAI, no relay**.
-- Opens the pane, then loops up to 25 steps:
-  1. `screencapture -x` → PNG (inherits bash's Screen Recording)
-  2. ShowUI-2B grounds *"the toggle switch next to RustDesk"* → `[x, y]`
-  3. `cliclick c:x,y` (inherits bash's Accessibility)
-  4. If RustDesk isn't in the list: grounds *"the plus + button"*, clicks it,
-     drives the file picker via **Cmd+Shift+G** → types `/Applications/RustDesk.app`
-     → Enter → Open.
-  5. Verifies the toggle is ON by sampling the pixel colour at the toggle
-     centre (blue ≈ `#0A84FF` on Sequoia → ON).
-  6. Dismisses "Quit & Reopen" → "Later".
+### Why the bundle ID must be lowercase
+
+`codesign -d -r- /Applications/RustDesk.app` reports `identifier "com.carriez.rustdesk"`
+(lowercase r). macOS bundle IDs are **case-sensitive** — tccd at runtime looks up
+the lowercase form from the code signature. If the TCC.db row has `com.carriez.RustDesk`
+(uppercase), tccd won't find it → shows the "RustDesk would like to record this
+computer's screen" prompt even though System Settings shows the toggle as ON.
 
 ---
 
