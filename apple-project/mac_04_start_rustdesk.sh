@@ -11,6 +11,12 @@ source "$(dirname "$0")/mac_lib.sh"
 
 log "Step 04 — verify RustDesk is listening on port $RUSTDESK_PORT"
 
+# --- restart the dialog-dismissal loop (step 03's died with its shell) -------
+# This covers the gap between step 03 and step 05 — if RustDesk triggers the
+# replayd "bypass window picker" dialog when it starts capturing, this loop
+# will click "Allow" automatically.
+start_dialog_dismissal_loop
+
 # --- 0. enable Remote Login (SSH) for done-flag fallback --------------------
 sudo launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || {
   sudo launchctl enable system/com.openssh.sshd 2>/dev/null || true

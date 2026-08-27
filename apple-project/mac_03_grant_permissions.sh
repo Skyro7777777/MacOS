@@ -27,6 +27,10 @@ require_env RUSTDESK_PASSWORD
 if ! command -v cliclick >/dev/null 2>&1; then
   brew install cliclick 2>&1 | tail -n2
 fi
+# Pillow (PIL) — needed by the dialog-dismissal loop's pixel-based detection
+if ! python3 -c "import PIL" 2>/dev/null; then
+  pip3 install Pillow 2>&1 | tail -n2 || true
+fi
 
 # --- 1. make sure RustDesk is installed + configured (idempotent) -----------
 # (matches mac_02; kept here so step 03 is self-sufficient even if 02 was skipped)

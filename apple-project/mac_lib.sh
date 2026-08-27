@@ -170,34 +170,48 @@ stop_screenshot_loop() {
 #   [Allow]  [Open System Settings]
 #
 # This dialog is owned by /usr/libexec/replayd and blocks EVERYTHING — including
-# our moondream2 AI agent which needs screencapture to see the screen.
+# RustDesk's screen capture (causing "waiting for image" forever).
 #
 # The fix: pre-authorize the capturing binaries by writing them into
 #   ~/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist
-# with far-future date values, then SIGHUP replayd so it re-reads the plist.
-# After this, screencapture works WITHOUT any dialog.
+# with far-future date values, then kill replayd so it re-reads the plist.
 #
-# CRITICAL: macOS 15.3+ requires 5 keys, not 2. Without kScreenCapturePrivacyHintDate
-# and kScreenCapturePrivacyHintPolicy, replayd shows the dialog EVERY TIME
-# (known macOS bug: if kScreenCapturePrivacyHintDate is unset/epoch, it never
-# updates and always alerts).
+# CRITICAL LEARNINGS (from the "waiting for image" bug on macOS 15.7.7):
+#   * The plist is TCC-protected — must write as ROOT (sudo), not as the user.
+#   * macOS 15.7 replayd expects a SIMPLE format: path = date string (not the
+#     5-key dict that 15.3 used). We write BOTH formats to cover all versions.
+#   * `killall -HUP replayd` is NOT enough — replayd doesn't re-read on HUP.
+#     Must use `killall -9 replayd` (SIGKILL) so launchd restarts it fresh.
+#   * Must also kill cfprefsd (both root + user) to invalidate the defaults cache.
 #
 # We authorize: /bin/bash (our shell), /usr/bin/screencapture (the CLI),
-# and the RustDesk binary (so it can capture too).
+# /usr/bin/osascript (for AX clicks), cliclick (homebrew), and the RustDesk binary.
 
 preauthorize_screencapture() {
   local sca_dir="$HOME/Library/Group Containers/group.com.apple.replayd"
   local sca_plist="$sca_dir/ScreenCaptureApprovals.plist"
-  mkdir -p "$sca_dir" 2>/dev/null || true
+  mkdir -p "$sca_dir" 2>/dev/null || sudo mkdir -p "$sca_dir"
 
-  log "🔐 pre-authorizing screencapture in ScreenCaptureApprovals.plist"
+  log "pre-authorizing screencapture in ScreenCaptureApprovals.plist"
 
-  # Write the Python script to a temp file (avoids heredoc-in-function issues).
-  local py_script="/tmp/preauth_screencapture.py"
-  cat > "$py_script" <<'PYEOF'
-import plistlib, os, datetime
+  # List of binaries to pre-authorize (paths that will capture the screen)
+  local bins=("/bin/bash" "/usr/bin/screencapture" "/usr/bin/osascript")
+  # add cliclick if installed
+  command -v cliclick >/dev/null 2>&1 && bins+=("$(command -v cliclick)")
+  # add RustDesk binary
+  [ -x "$RUSTDESK_BIN" ] && bins+=("$RUSTDESK_BIN")
 
-plist_path = os.path.expanduser("~/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist")
+  # Write the plist as ROOT (it's TCC-protected on 15.7).
+  # Use the SIMPLE format: path = date string (proven by lapcatsoftware.com
+  # for macOS 15.0-15.7). This is the format replayd expects on 15.7.
+  # We pass the binary list as a JSON env var to avoid bash/python quoting issues.
+  local bins_json
+  bins_json=$(printf '%s\n' "${bins[@]}" | python3 -c "import json,sys; print(json.dumps([l.rstrip() for l in sys.stdin]))")
+  BINS_JSON="$bins_json" SCA_PLIST="$sca_plist" sudo -E python3 <<'PYEOF'
+import plistlib, os, datetime, json, shutil
+
+plist_path = os.environ["SCA_PLIST"]
+bins = json.loads(os.environ["BINS_JSON"])
 os.makedirs(os.path.dirname(plist_path), exist_ok=True)
 
 data = {}
@@ -209,35 +223,27 @@ if os.path.exists(plist_path):
         data = {}
 
 far_future = datetime.datetime(2099, 1, 1, 0, 0, 0, tzinfo=datetime.timezone.utc)
-
-bins_to_authorize = ["/bin/bash", "/usr/bin/screencapture"]
-rustdesk = "/Applications/RustDesk.app/Contents/MacOS/RustDesk"
-if os.path.exists(rustdesk):
-    bins_to_authorize.append(rustdesk)
-
-# CRITICAL: macOS 15.3+ requires 5 keys, not 2. Without kScreenCapturePrivacyHintPolicy
-# and kScreenCapturePrivacyHintDate, replayd shows the dialog EVERY TIME (known macOS bug:
-# if kScreenCapturePrivacyHintDate is unset/epoch, it never updates and always alerts).
-for b in bins_to_authorize:
-    data[b] = {
-        "kScreenCaptureApprovalLastAlerted": far_future,
-        "kScreenCaptureApprovalLastUsed": far_future,
-        "kScreenCapturePrivacyHintDate": far_future,
-        "kScreenCapturePrivacyHintPolicy": 7776000,  # 90 days in seconds
-        "kScreenCaptureAlertableUsageCount": 0,
-    }
+for b in bins:
+    data[b] = far_future  # simple format: path = date
 
 with open(plist_path, "wb") as f:
     plistlib.dump(data, f)
-
-print(f"  authorized {len(bins_to_authorize)} binaries (5 keys each) in {plist_path}")
+print(f"  authorized {len(bins)} binaries (simple date format) in {plist_path}")
 PYEOF
 
-  # Run the Python script; if it fails, fall back to `defaults write`
-  if ! python3 "$py_script" 2>/dev/null; then
-    warn "  plistlib approach failed — falling back to defaults write"
-    for bin in /bin/bash /usr/bin/screencapture "$RUSTDESK_BIN"; do
-      defaults write "$sca_plist" "$bin" -dict \
+  # Fallback: if plistlib failed, use `defaults write` as root
+  if [ ! -f "$sca_plist" ]; then
+    warn "  plistlib as root failed — trying defaults write as root"
+    for bin in "${bins[@]}"; do
+      sudo defaults write "$sca_plist" "$bin" -date "2099-01-01 00:00:00 +0000" 2>/dev/null || true
+    done
+  fi
+
+  # ALSO write the 5-key dict format (for 15.3-15.6) as a secondary fallback.
+  if sw_vers -productVersion 2>/dev/null | grep -qE '^15\.[3-6]\.'; then
+    log "  macOS 15.3-15.6 detected — adding 5-key dict format too"
+    for bin in "${bins[@]}"; do
+      sudo defaults write "$sca_plist" "$bin" -dict \
         kScreenCaptureApprovalLastAlerted -date "2099-01-01 00:00:00 +0000" \
         kScreenCaptureApprovalLastUsed     -date "2099-01-01 00:00:00 +0000" \
         kScreenCapturePrivacyHintDate      -date "2099-01-01 00:00:00 +0000" \
@@ -245,14 +251,19 @@ PYEOF
         kScreenCaptureAlertableUsageCount  0 2>/dev/null || true
     done
   fi
-  rm -f "$py_script"
 
-  # SIGHUP replayd so it re-reads the plist
-  sudo killall -HUP replayd 2>/dev/null || true
-  # also flush cfprefsd so the defaults cache is invalidated
-  sudo killall -u "$USER" cfprefsd 2>/dev/null || true
-  sleep 1
-  ok "🔐 screencapture pre-authorized (replayd reloaded, 5 keys per binary)"
+  # CRITICAL: kill replayd with SIGKILL (not HUP) so launchd restarts it
+  # fresh and it re-reads the plist. HUP does NOT trigger a re-read.
+  sudo killall -9 replayd 2>/dev/null || true
+  # Kill cfprefsd for BOTH root and user to invalidate the defaults cache
+  sudo killall -9 cfprefsd 2>/dev/null || true
+  sleep 2  # give launchd time to restart replayd
+  # verify replayd restarted
+  if pgrep -x replayd >/dev/null 2>&1; then
+    ok "screencapture pre-authorized (replayd restarted, ${#bins[@]} binaries)"
+  else
+    warn "replayd did not restart after kill — screen capture may still prompt"
+  fi
 }
 
 # --- Sequoia privacy-dialog auto-dismissal -----------------------------------
@@ -333,18 +344,76 @@ start_dialog_dismissal_loop() {
         end try
       ' 2>/dev/null || true
 
-      # --- Method 2: cliclick -- ONE precise click for AX-invisible dialogs --
-      # Only fires when a known system-dialog process is frontmost, to avoid
-      # random clicking when the operator is controlling the desktop.
-      # The "Allow" button on a centered system dialog is the RIGHT button,
-      # roughly 60% from the left edge of the dialog (~612,400 on 1024x768).
+      # --- Method 2: detect the replayd "bypass window picker" dialog + click Allow
+      # The replayd dialog (AX-invisible on macOS 15.4+) blocks screen capture
+      # for EVERY app (bash/screencapture/RustDesk) — it's the #1 cause of
+      # "waiting for image". Detection: check if any window's AX text contains
+      # "bypass" or "requesting to" (the dialog body text). Even though the
+      # BUTTONS are AX-invisible, the window text is often readable.
+      # If found, click "Allow" at (511, 368) — the confirmed button position
+      # on a 1024x768 screen (measured via pixel analysis of the actual dialog).
       if command -v cliclick >/dev/null 2>&1; then
-        front_proc="$(osascript -e 'tell application "System Events" to return name of first application process whose frontmost is true' 2>/dev/null || echo '')"
-        if echo "$front_proc" | grep -qE "$_SYSTEM_DIALOG_PROCS"; then
-          # System dialog is frontmost -- click "Allow" (right button)
-          cliclick c:612,400 2>/dev/null || true
-          sleep 0.5
-          cliclick c:612,430 2>/dev/null || true
+        dialog_detected="$(osascript -e '
+          tell application "System Events"
+            try
+              repeat with p in (every process whose background only is false)
+                repeat with w in (windows of p)
+                  try
+                    set wName to name of w as text
+                    if wName contains "bypass" or wName contains "requesting" or wName contains "screen and audio" then
+                      return "FOUND:" & wName
+                    end if
+                  end try
+                  try
+                    repeat with ui in (UI elements of w)
+                      try
+                        set uiDesc to description of ui as text
+                        if uiDesc contains "bypass" or uiDesc contains "requesting" or uiDesc contains "screen and audio" then
+                          return "FOUND:" & uiDesc
+                        end if
+                      end try
+                    end repeat
+                  end try
+                end repeat
+              end repeat
+            end try
+          end tell
+          return "NONE"
+        ' 2>/dev/null || echo 'NONE')"
+        if echo "$dialog_detected" | grep -q "FOUND"; then
+          # replayd dialog detected — click "Allow" at the confirmed position
+          cliclick c:511,368 2>/dev/null || true
+          sleep 1
+          # click again in case the first click missed (slightly different dialog size)
+          cliclick c:511,380 2>/dev/null || true
+        fi
+      fi
+
+      # --- Method 3: pixel-based detection (fallback if AX text is invisible too)
+      # Check if the pixel at (511, 368) is blue (macOS accent #0A84FF) — if so,
+      # the "Allow" button is present even if AX can't see it. We use a tiny
+      # screencapture of just that pixel. screencapture inherits bash's Screen
+      # Recording permission (the "responsible process" trick), so it works even
+      # before RustDesk gets its own permission.
+      if command -v cliclick >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+        # capture a 3x3 region around the Allow button position
+        tmp_shot="/tmp/dialog_pixel_check.png"
+        screencapture -R 510,367,3,3 -x "$tmp_shot" 2>/dev/null
+        if [ -f "$tmp_shot" ]; then
+          is_blue="$(python3 -c "
+from PIL import Image
+try:
+    im = Image.open('$tmp_shot').convert('RGB')
+    r,g,b = im.getpixel((1,1))
+    # macOS accent blue: r<40, 100<g<170, b>230
+    print('YES' if (r<40 and 100<g<170 and b>230) else 'NO')
+except: print('NO')
+" 2>/dev/null || echo 'NO')"
+          if [ "$is_blue" = "YES" ]; then
+            cliclick c:511,368 2>/dev/null || true
+            sleep 1
+          fi
+          rm -f "$tmp_shot"
         fi
       fi
       sleep 3
