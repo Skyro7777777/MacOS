@@ -40,13 +40,14 @@ jobs:
       - name: Step 05 — hold session open for remote control
         run: bash apple-project/mac_05_hold_session.sh
 
-      - name: Upload logs (always)
+      - name: Upload logs + screenshots (always)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mac-session-logs
+          name: mac-session
           path: |
             /tmp/apple-project/grant_output.log
             /tmp/apple-project/connection-info.txt
+            /tmp/apple-project/screenshots/
           if-no-files-found: warn
           retention-days: 3

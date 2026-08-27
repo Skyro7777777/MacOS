@@ -24,12 +24,25 @@ rm -f "$DONE_FLAG"
 # restart the dialog-dismissal loop (died with step 04's shell)
 start_dialog_dismissal_loop
 
+# take a periodic screenshot every 15s for debugging (if operator reports issues)
+(
+  mkdir -p "$STATE_DIR/screenshots"
+  while true; do
+    screencapture -x -C "$STATE_DIR/screenshots/hold_$(date +%Y%m%d_%H%M%S).png" 2>/dev/null || true
+    sleep 15
+  done
+) &
+HOLD_SHOT_PID=$!
+disown 2>/dev/null || true
+log "hold screenshot loop started (PID=$HOLD_SHOT_PID, every 15s)"
+
 elapsed=0
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   if [ -f "$DONE_FLAG" ]; then
     ok "done-flag detected — ending session cleanly"
     rm -f "$DONE_FLAG"
     stop_dialog_dismissal_loop
+    kill "$HOLD_SHOT_PID" 2>/dev/null || true
     exit 0
   fi
   # heartbeat every 30s (GitHub kills jobs with 10+ min of no log output)
@@ -43,4 +56,5 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
 done
 
 stop_dialog_dismissal_loop
+kill "$HOLD_SHOT_PID" 2>/dev/null || true
 warn "hold timeout reached ($HOLD_MINUTES_INT min) — ending session"
