@@ -21,14 +21,17 @@ if ! command -v displayplacer >/dev/null 2>&1; then
 fi
 if command -v displayplacer >/dev/null 2>&1; then
   log "setting display resolution to 1920x1080"
-  # get the first display's persistent ID
-  DISP_ID="$(displayplacer list 2>/dev/null | grep -oE 'Persistent id: [A-F0-9-]+' | head -1 | awk '{print $3}')"
+  # get the first display's persistent ID (|| true prevents set -e from killing
+  # the script if grep finds no match)
+  DISP_ID="$(displayplacer list 2>/dev/null | grep -oE 'Persistent id: [A-F0-9-]+' | head -1 | awk '{print $3}' || true)"
   if [ -n "$DISP_ID" ]; then
     displayplacer "id:$DISP_ID res:1920x1080 scaling:on origin:(0,0) degree:0" 2>/dev/null && \
       ok "display set to 1920x1080" || warn "displayplacer set failed — using default resolution"
   else
     warn "could not find display ID — using default resolution"
   fi
+else
+  warn "displayplacer not installed — using default resolution"
 fi
 
 # --- 1. enable Remote Login (SSH) for done-flag fallback --------------------
