@@ -24,7 +24,10 @@ export RUNNER_USER MAC_USER PROJECT_ROOT STATE_DIR DONE_FLAG
 # --- require a secret env var -----------------------------------------------
 require_env() {
   local name="$1"
-  [ -z "${!name:-}" ] && die "Required env var $name is empty. Add it as a GitHub repo Secret."
+  if [ -z "${!name:-}" ]; then
+    die "Required env var $name is empty. Add it as a GitHub repo Secret."
+  fi
+  return 0  # explicitly return 0 so set -e doesn't kill the caller
 }
 
 # --- run as the GUI user (inside the Aqua session) --------------------------
