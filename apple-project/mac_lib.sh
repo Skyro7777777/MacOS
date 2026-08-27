@@ -106,6 +106,7 @@ export DIALOG_DISMISS_PID
 
 # Find + click the blue "Allow" button by scanning the screen center.
 # Returns 0 if a button was found + clicked, 1 if not.
+# OPTIMIZED: samples a small region (not the full screen) for speed.
 click_blue_allow_button() {
   command -v python3 >/dev/null 2>&1 || return 1
   command -v cliclick >/dev/null 2>&1 || return 1
@@ -116,36 +117,36 @@ click_blue_allow_button() {
 from PIL import Image
 im = Image.open('$shot').convert('RGB')
 w, h = im.size
-# Scan a region around screen center (where dialogs always appear)
-# Width: center 50%, Height: center ±80px (button row is near center)
 cx, cy = w//2, h//2
+# Scan a SMALL region around center (button is always near center)
+# Width: ±300px, Height: ±80px — much faster than scanning the whole center
 blue = []
-for y in range(max(0,cy-100), min(h,cy+100)):
-    for x in range(max(0,cx-w//4), min(w,cx+w//4), 2):  # every 2nd pixel
+for y in range(max(0,cy-80), min(h,cy+80)):
+    for x in range(max(0,cx-300), min(w,cx+300), 2):
         r,g,b = im.getpixel((x,y))
         if r<40 and 100<g<170 and b>230:
             blue.append((x,y))
-if not blue:
+if len(blue) < 30:
     print('NONE')
 else:
-    # find rows with many blue pixels (the button is wide + horizontal)
     from collections import Counter
     yc = Counter(p[1] for p in blue)
-    btn_rows = {y for y,c in yc.items() if c > 30}
+    btn_rows = {y for y,c in yc.items() if c > 15}
     if not btn_rows:
         print('NONE')
     else:
         bp = [p for p in blue if p[1] in btn_rows]
         bxs = [p[0] for p in bp]
         bys = [p[1] for p in bp]
-        width = max(bxs)-min(bxs)
-        if width > 80:  # real button is >80px wide
+        if max(bxs)-min(bxs) > 80:
             print(f'{(min(bxs)+max(bxs))//2},{(min(bys)+max(bys))//2}')
         else:
             print('NONE')
 " 2>/dev/null)"
   rm -f "$shot"
   if [ -n "$coords" ] && [ "$coords" != "NONE" ]; then
+    # click the button center + a few nearby positions (in case the center
+    # hits the white text, not the blue background)
     cliclick c:"$coords" 2>/dev/null || true
     return 0
   fi

@@ -33,12 +33,16 @@ fi
 #        at the final resolution, and RustDesk launches at 1920x1080) --------
 if command -v displayplacer >/dev/null 2>&1; then
   log "setting display resolution to 1920x1080"
-  DISP_ID="$(displayplacer list 2>/dev/null | grep -oE 'Persistent id: [A-F0-9-]+' | head -1 | awk '{print $3}' || true)"
+  # displayplacer list outputs: "Persistent id: XXXXXXXX-XXXX-..." (may have lowercase hex)
+  DISP_ID="$(displayplacer list 2>/dev/null | grep -iE 'Persistent id:' | head -1 | sed 's/.*Persistent id: *//' | tr -d ' \r' || true)"
   if [ -n "$DISP_ID" ]; then
+    log "found display: $DISP_ID"
     displayplacer "id:$DISP_ID res:1920x1080 scaling:on origin:(0,0) degree:0" 2>/dev/null && \
       ok "display set to 1920x1080" || warn "displayplacer set failed — using default"
   else
-    warn "could not find display ID — using default resolution"
+    # fallback: try without an ID (displayplacer may accept just the resolution)
+    displayplacer "res:1920x1080 scaling:on origin:(0,0) degree:0" 2>/dev/null && \
+      ok "display set to 1920x1080 (no-ID fallback)" || warn "could not set 1920x1080 — using default"
   fi
 fi
 
