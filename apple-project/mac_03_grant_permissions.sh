@@ -92,30 +92,62 @@ cat "$STATE_DIR/grant_output.log"
 if [ "$GRANT_RC" -eq 0 ]; then
   ok "AUTOMATED GRANT SUCCEEDED — RustDesk has Screen Recording + Accessibility + Input Monitoring + Local Network"
 
-  # --- PROACTIVELY trigger the replayd "bypass window picker" dialog + click Allow
+  # --- PROACTIVELY trigger + WAIT for the replayd dialog to be dismissed --------
   # The preauthorization plist MAY suppress the dialog. But if it doesn't, we
-  # want the dialog to appear NOW (while the dialog-dismissal loop is running)
-  # so it gets clicked "Allow" BEFORE the operator connects via RustDesk.
-  # We trigger it by running screencapture once. The dialog will appear, the
-  # loop's pixel detection (Method 3: check 420,368 for blue) will detect it,
-  # and cliclick will click "Allow" at (511, 368).
+  # need to:
+  #   1. Trigger the dialog (by running screencapture once)
+  #   2. WAIT for the dialog-dismissal loop to click "Allow" (up to 120s)
+  #   3. ONLY THEN restart RustDesk — so it launches into a clean state
+  #      (TCC granted + replayd approved). If RustDesk launches BEFORE the
+  #      dialog is dismissed, it caches "no permission" -> pink banner forever.
   log "triggering screencapture to surface any replayd dialog..."
   screencapture -x -C /tmp/apple-project/trigger_shot.png 2>/dev/null || true
-  sleep 3  # give the dialog time to appear + the loop time to click it
-  take_screenshot "03_after_dialog_click"
-  # check if the dialog is gone (pixel at 420,368 should NOT be blue)
-  if python3 -c "
+
+  # Wait up to 120s for the dialog to be dismissed (poll pixel at 420,368)
+  log "waiting for replayd dialog to be dismissed (up to 120s)..."
+  dialog_gone=false
+  for attempt in $(seq 1 40); do
+    sleep 3
+    # take a quick screenshot + check the pixel
+    screencapture -x -C /tmp/apple-project/dialog_check.png 2>/dev/null || true
+    if python3 -c "
 from PIL import Image
 try:
-    im = Image.open('/tmp/apple-project/screenshots/$(ls -t /tmp/apple-project/screenshots/ | head -1)').convert('RGB')
+    im = Image.open('/tmp/apple-project/dialog_check.png').convert('RGB')
     r,g,b = im.getpixel((420,368))
+    # dialog present = blue at (420,368); dialog gone = NOT blue
     exit(0 if (r<40 and 100<g<170 and b>230) else 1)
-except: exit(1)
+except:
+    exit(1)
 " 2>/dev/null; then
-    warn "replayd dialog STILL present — the loop may need more time"
-  else
-    ok "replayd dialog dismissed (or never appeared) — screen capture is clear"
+      log "  attempt $attempt: dialog still present (blue at 420,368) — waiting..."
+    else
+      ok "  attempt $attempt: dialog dismissed (or never appeared) — screen clear!"
+      dialog_gone=true
+      break
+    fi
+  done
+
+  if [ "$dialog_gone" = "false" ]; then
+    warn "replayd dialog still present after 120s — clicking Allow manually..."
+    cliclick c:511,368 2>/dev/null || true
+    sleep 3
   fi
+
+  take_screenshot "03_after_dialog_click"
+
+  # --- CRITICAL: restart RustDesk AFTER the dialog is dismissed ----------------
+  # RustDesk caches its permission check at launch. If it launched while the
+  # replayd dialog was blocking, it cached "no Screen Recording" and shows the
+  # pink "Permissions/Configure" banner forever — even though TCC says granted.
+  # Restarting it NOW (after TCC grant + replayd approval) makes it re-check
+  # and pick up the clean state -> pink banner disappears -> screen capture works.
+  log "restarting RustDesk to pick up the clean permission state..."
+  pkill -9 -x RustDesk 2>/dev/null || true
+  sleep 3
+  gui_run open -a RustDesk || true
+  sleep 8
+  ok "RustDesk restarted — should now capture the screen without the pink banner"
 
   stop_screenshot_loop
   take_screenshot "03_grant_success"
