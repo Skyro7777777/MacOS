@@ -258,9 +258,17 @@ PYEOF
   # Kill cfprefsd for BOTH root and user to invalidate the defaults cache
   sudo killall -9 cfprefsd 2>/dev/null || true
   sleep 2  # give launchd time to restart replayd
-  # verify replayd restarted
+  # ALSO write to the SYSTEM-wide location (replayd is a system daemon on 15.7
+  # and may read from /Library/Group Containers instead of ~/Library)
+  local sys_sca_dir="/Library/Group Containers/group.com.apple.replayd"
+  sudo mkdir -p "$sys_sca_dir" 2>/dev/null || true
+  for bin in "${bins[@]}"; do
+    sudo defaults write "$sys_sca_dir/ScreenCaptureApprovals.plist" "$bin" \
+      -date "2099-01-01 00:00:00 +0000" 2>/dev/null || true
+  done
+  # verify replayd restarted + plist exists
   if pgrep -x replayd >/dev/null 2>&1; then
-    ok "screencapture pre-authorized (replayd restarted, ${#bins[@]} binaries)"
+    ok "screencapture pre-authorized (replayd restarted, ${#bins[@]} binaries, user+system plist)"
   else
     warn "replayd did not restart after kill — screen capture may still prompt"
   fi
@@ -390,26 +398,29 @@ start_dialog_dismissal_loop() {
       fi
 
       # --- Method 3: pixel-based detection (fallback if AX text is invisible too)
-      # Check if the pixel at (511, 368) is blue (macOS accent #0A84FF) — if so,
-      # the "Allow" button is present even if AX can't see it. We use a tiny
-      # screencapture of just that pixel. screencapture inherits bash's Screen
-      # Recording permission (the "responsible process" trick), so it works even
-      # before RustDesk gets its own permission.
+      # The replayd "bypass window picker" dialog has an "Allow" button at
+      # center (511, 368) on a 1024x768 screen. BUT the CENTER pixel is the
+      # WHITE TEXT "Allow", not the blue background. So we check the BLUE
+      # BACKGROUND at (420, 368) — left part of the button, away from the text.
+      # When the dialog is present: (420,368) = macOS accent blue (#0A84FF).
+      # When absent: (420,368) = black desktop or other non-blue content.
+      # screencapture inherits bash's Screen Recording permission, so it works
+      # even before RustDesk gets its own permission.
       if command -v cliclick >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
-        # capture a 3x3 region around the Allow button position
         tmp_shot="/tmp/dialog_pixel_check.png"
-        screencapture -R 510,367,3,3 -x "$tmp_shot" 2>/dev/null
+        # capture a 5x5 region around (420, 368) — the blue background of Allow
+        screencapture -R 418,366,5,5 -x "$tmp_shot" 2>/dev/null
         if [ -f "$tmp_shot" ]; then
           is_blue="$(python3 -c "
 from PIL import Image
 try:
     im = Image.open('$tmp_shot').convert('RGB')
-    r,g,b = im.getpixel((1,1))
-    # macOS accent blue: r<40, 100<g<170, b>230
+    r,g,b = im.getpixel((2,2))
     print('YES' if (r<40 and 100<g<170 and b>230) else 'NO')
 except: print('NO')
 " 2>/dev/null || echo 'NO')"
           if [ "$is_blue" = "YES" ]; then
+            # dialog detected — click the CENTER of the Allow button (511, 368)
             cliclick c:511,368 2>/dev/null || true
             sleep 1
           fi
