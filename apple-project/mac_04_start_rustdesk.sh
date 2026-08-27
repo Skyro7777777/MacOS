@@ -61,18 +61,16 @@ fi
 # re-read the file AFTER launch to get the ID the client should actually use.
 sleep 3  # give RustDesk time to write its config
 RD_TOML="$RUSTDESK_PREFS_DIR/RustDesk.toml"
-RD_ID="$(grep -oE "^id *= *'[^']*'" "$RD_TOML" 2>/dev/null | head -1 | sed "s/^id *= *'//;s/'$//")"
+RD_ID="$(grep -oE "^id *= *'[^']*'" "$RD_TOML" 2>/dev/null | head -1 | sed "s/^id *= *'//;s/'$//" || true)"
 if [ -z "$RD_ID" ]; then
-  # fallback: use the ID we wrote
   RD_ID="$(cat "$STATE_DIR/rustdesk-id" 2>/dev/null || echo UNKNOWN)"
   warn "could not read actual RustDesk ID from config — using: $RD_ID"
 else
   ok "actual RustDesk ID from config: $RD_ID"
 fi
-# update the state file with the REAL ID
 echo "$RD_ID" > "$STATE_DIR/rustdesk-id"
 
-RD_PASS="$(grep -oE "^password *= *'[^']*'" "$RD_TOML" 2>/dev/null | head -1 | sed "s/^password *= *'//;s/'$//")"
+RD_PASS="$(grep -oE "^password *= *'[^']*'" "$RD_TOML" 2>/dev/null | head -1 | sed "s/^password *= *'//;s/'$//" || true)"
 [ -z "$RD_PASS" ] && RD_PASS="$(cat "$STATE_DIR/rustdesk-password" 2>/dev/null || echo UNKNOWN)"
 
 # --- 5. print connection info -----------------------------------------------
