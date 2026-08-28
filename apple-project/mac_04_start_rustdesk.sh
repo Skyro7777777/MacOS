@@ -84,6 +84,8 @@ cat > "$STATE_DIR/connection-info.txt" <<EOF
     (end session: ssh cihelper@$TS_IP 'touch /tmp/apple-project/remote-done')
 
   Display .......... 1920x1080
+  Appearance ....... Dark mode
+  Sleep ............ Disabled (caffeinate keeps display + system awake)
 
 ==============================================================================
 EOF

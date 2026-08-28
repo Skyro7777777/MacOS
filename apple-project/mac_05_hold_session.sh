@@ -24,6 +24,15 @@ rm -f "$DONE_FLAG"
 # restart the dialog-dismissal loop (died with step 04's shell)
 start_dialog_dismissal_loop
 
+# prevent display/system sleep during the hold session (each step is a new shell,
+# so the caffeinate from step 03 died). This is the #1 fix for "loses connection
+# easily" — macOS sleeps the display and drops the RustDesk connection.
+pkill -f "caffeinate -dis" 2>/dev/null || true
+caffeinate -d -i -s &
+CAFFEINATE_PID=$!
+disown 2>/dev/null || true
+log "caffeinate started (PID=$CAFFEINATE_PID) — display will stay awake"
+
 # take a periodic screenshot every 15s for debugging (if operator reports issues)
 (
   mkdir -p "$STATE_DIR/screenshots"
