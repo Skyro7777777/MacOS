@@ -81,13 +81,6 @@ allow-keyboard = 'Y'
 allow-mouse = 'Y'
 allow-restart = 'Y'
 allow-cam = 'Y'
-# --- CONNECTION STABILITY (prevents frequent disconnects) ---
-# Keep the screen awake during incoming sessions (prevents sleep → disconnect)
-keep-awake-during-incoming-sessions = 'Y'
-# Disable auto-disconnect (don't drop idle connections)
-allow-auto-disconnect = 'N'
-# Use dark theme for RustDesk UI
-theme = 'dark'
 EOF
 sudo mkdir -p /var/root/Library/Preferences/com.carriez.RustDesk
 sudo cp "$RUSTDESK_USER_PREFS/RustDesk.toml" "$RUSTDESK_USER_PREFS/RustDesk2.toml" \
@@ -135,32 +128,7 @@ if [ "$dialog_gone" = "false" ]; then
 fi
 take_screenshot "03_after_dialog_click"
 
-# --- 6. set macOS dark mode + prevent sleep + keep display awake ------------
-# These improve the remote experience + prevent connection drops from sleep.
-log "setting macOS dark mode + preventing sleep..."
-
-# Dark mode (Appearance → Dark)
-osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to true' 2>/dev/null || true
-# Also set via defaults (belt and suspenders)
-sudo -u "$RUNNER_USER" defaults write NSGlobalDomain AppleInterfaceStyle -string "Dark" 2>/dev/null || true
-sudo -u "$RUNNER_USER" defaults write NSGlobalDomain AppleInterfaceStyleSwitchesAutomatically -bool false 2>/dev/null || true
-ok "dark mode enabled"
-
-# Prevent display sleep + system sleep (caffeinate runs in background)
-# -d: prevent display sleep, -i: prevent system idle sleep, -s: prevent system sleep
-# This is the #1 fix for "loses connection easily" — macOS sleeps the display
-# and drops the RustDesk connection. caffeinate keeps it awake.
-pkill -f "caffeinate -dis" 2>/dev/null || true
-sudo -u "$RUNNER_USER" caffeinate -d -i -s -w "$(pgrep -f RustDesk | head -1)" &
-CAFFEINATE_PID=$!
-disown 2>/dev/null || true
-log "caffeinate started (PID=$CAFFEINATE_PID) — display will stay awake"
-
-# Disable screen saver (it can also interfere)
-sudo -u "$RUNNER_USER" defaults write com.apple.screensaver idleTime -int 0 2>/dev/null || true
-ok "screen saver disabled"
-
-# --- 7. restart RustDesk to pick up the clean permission state ---------------
+# --- 6. restart RustDesk to pick up the clean permission state --------------
 log "restarting RustDesk to pick up the clean permission state..."
 pkill -9 -x RustDesk 2>/dev/null || true
 sleep 3
