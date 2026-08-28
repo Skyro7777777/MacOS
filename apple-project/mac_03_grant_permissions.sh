@@ -33,25 +33,22 @@ fi
 #        at the final resolution, and RustDesk launches at 1920x1080) --------
 if command -v displayplacer >/dev/null 2>&1; then
   log "setting display resolution to 1920x1080"
-  # dump the full displayplacer list output to the log so we can see the format
-  log "displayplacer list output:"
-  displayplacer list 2>&1 | while IFS= read -r line; do log "  $line"; done
-  # parse the persistent ID (try multiple formats)
-  DISP_ID="$(displayplacer list 2>/dev/null | grep -iE 'Persistent id:' | head -1 | sed 's/.*Persistent id: *//' | tr -d ' \r' || true)"
+  # parse the persistent screen ID (note: it's "Persistent SCREEN id", not "Persistent id")
+  DISP_ID="$(displayplacer list 2>/dev/null | grep -iE 'Persistent screen id:' | head -1 | sed 's/.*Persistent screen id: *//' | tr -d ' \r' || true)"
   if [ -n "$DISP_ID" ]; then
-    log "found display ID: $DISP_ID"
-    displayplacer "id:$DISP_ID res:1920x1080 scaling:on origin:(0,0) degree:0" 2>&1 | while IFS= read -r line; do log "  $line"; done
-    ok "display set to 1920x1080"
+    log "found display: $DISP_ID"
+    # use the exact format displayplacer suggests (with hz + color_depth + enabled)
+    displayplacer "id:$DISP_ID res:1920x1080 hz:60 color_depth:7 enabled:true scaling:off origin:(0,0) degree:0" 2>&1 | while IFS= read -r line; do log "  $line"; done || true
+    sleep 2
+    CUR_RES="$(displayplacer list 2>/dev/null | grep -iE 'Resolution:' | head -1 | sed 's/.*Resolution: *//' | tr -d ' \r' || true)"
+    if echo "$CUR_RES" | grep -q "1920x1080"; then
+      ok "display set to 1920x1080"
+    else
+      warn "display resolution is $CUR_RES (expected 1920x1080) — may need manual change"
+    fi
   else
-    # fallback: try without an ID (displayplacer may accept just the resolution)
-    log "no Persistent id found — trying no-ID fallback"
-    displayplacer "res:1920x1080 scaling:on origin:(0,0) degree:0" 2>&1 | while IFS= read -r line; do log "  $line"; done
-    ok "display set to 1920x1080 (no-ID fallback)"
+    warn "could not find display ID — using default resolution"
   fi
-  # verify the resolution actually changed
-  sleep 2
-  CUR_RES="$(displayplacer list 2>/dev/null | grep -iE 'Resolution:' | head -1 | sed 's/.*Resolution: *//' | tr -d ' \r' || true)"
-  log "current resolution: $CUR_RES"
 fi
 
 # --- 2. install + configure RustDesk (idempotent) ---------------------------
