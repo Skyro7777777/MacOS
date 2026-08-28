@@ -112,14 +112,12 @@ click_blue_allow_button() {
   command -v cliclick >/dev/null 2>&1 || return 1
   local shot="/tmp/_dialog_scan.png"
   screencapture -x -C "$shot" 2>/dev/null || return 1
-  local coords
-  coords="$(python3 -c "
+  local result
+  result="$(python3 -c "
 from PIL import Image
 im = Image.open('$shot').convert('RGB')
 w, h = im.size
 cx, cy = w//2, h//2
-# Scan a SMALL region around center (button is always near center)
-# Width: ±300px, Height: ±80px — much faster than scanning the whole center
 blue = []
 for y in range(max(0,cy-80), min(h,cy+80)):
     for x in range(max(0,cx-300), min(w,cx+300), 2):
@@ -139,15 +137,25 @@ else:
         bxs = [p[0] for p in bp]
         bys = [p[1] for p in bp]
         if max(bxs)-min(bxs) > 80:
-            print(f'{(min(bxs)+max(bxs))//2},{(min(bys)+max(bys))//2}')
+            print(f'{min(bxs)},{min(bys)},{max(bxs)},{max(bys)}')
         else:
             print('NONE')
 " 2>/dev/null)"
   rm -f "$shot"
-  if [ -n "$coords" ] && [ "$coords" != "NONE" ]; then
-    # click the button center + a few nearby positions (in case the center
-    # hits the white text, not the blue background)
-    cliclick c:"$coords" 2>/dev/null || true
+  if [ -n "$result" ] && [ "$result" != "NONE" ]; then
+    # result = x1,y1,x2,y2 (button bounding box)
+    local x1 y1 x2 y2 cx cy left_x right_x
+    IFS=',' read -r x1 y1 x2 y2 <<< "$result"
+    cx=$(( (x1 + x2) / 2 ))
+    cy=$(( (y1 + y2) / 2 ))
+    left_x=$(( x1 + (x2-x1)/6 ))
+    right_x=$(( x1 + (x2-x1)*5/6 ))
+    # Click MULTIPLE positions: left, center, right (center may be white text)
+    cliclick c:"$left_x","$cy" 2>/dev/null || true
+    sleep 0.3
+    cliclick c:"$cx","$cy" 2>/dev/null || true
+    sleep 0.3
+    cliclick c:"$right_x","$cy" 2>/dev/null || true
     return 0
   fi
   return 1
@@ -185,12 +193,12 @@ start_dialog_dismissal_loop() {
       # (resolution-independent: scans screen center for macOS accent blue)
       click_blue_allow_button
 
-      sleep 3
+      sleep 1
     done
   ) &
   DIALOG_DISMISS_PID=$!
   disown 2>/dev/null || true
-  log "dialog-dismissal loop started (PID=$DIALOG_DISMISS_PID, clicks: Allow/Accept/Later/Not Now)"
+  log "dialog-dismissal loop started (PID=$DIALOG_DISMISS_PID, interval=1s, multi-click)"
 }
 
 stop_dialog_dismissal_loop() {
