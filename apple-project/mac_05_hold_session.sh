@@ -4,6 +4,12 @@
 #  Keeps the job alive so the operator can drive the Mac via RustDesk.
 #  Restarts the dialog-dismissal loop (each step is a separate shell).
 #  Exits when the done-flag appears OR the hold timeout elapses.
+#
+#  IMPORTANT: NO screenshot loop during hold! A background screencapture every
+#  15s COMPETES with RustDesk for the Screen Recording resource → causes the
+#  "connection forcibly closed" (os error 10054) + freezes every ~1 min.
+#  The dialog-dismissal loop is the only background process — it only
+#  screencaptures when it detects a dialog is present (rare), not constantly.
 # =============================================================================
 set -euo pipefail
 source "$(dirname "$0")/mac_lib.sh"
@@ -22,19 +28,10 @@ log "(end: ssh cihelper@<ip> 'touch $DONE_FLAG'  or  wait for timeout)"
 rm -f "$DONE_FLAG"
 
 # restart the dialog-dismissal loop (died with step 04's shell)
+# This is the ONLY background process. It uses osascript (lightweight) to
+# detect dialogs, and only does a screencapture+pixel-scan when a dialog is
+# likely present (detected via AX). No constant screenshots.
 start_dialog_dismissal_loop
-
-# take a periodic screenshot every 15s for debugging (if operator reports issues)
-(
-  mkdir -p "$STATE_DIR/screenshots"
-  while true; do
-    screencapture -x -C "$STATE_DIR/screenshots/hold_$(date +%Y%m%d_%H%M%S).png" 2>/dev/null || true
-    sleep 15
-  done
-) &
-HOLD_SHOT_PID=$!
-disown 2>/dev/null || true
-log "hold screenshot loop started (PID=$HOLD_SHOT_PID, every 15s)"
 
 elapsed=0
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
@@ -42,7 +39,6 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
     ok "done-flag detected — ending session cleanly"
     rm -f "$DONE_FLAG"
     stop_dialog_dismissal_loop
-    kill "$HOLD_SHOT_PID" 2>/dev/null || true
     exit 0
   fi
   # heartbeat every 30s (GitHub kills jobs with 10+ min of no log output)
@@ -56,5 +52,4 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
 done
 
 stop_dialog_dismissal_loop
-kill "$HOLD_SHOT_PID" 2>/dev/null || true
 warn "hold timeout reached ($HOLD_MINUTES_INT min) — ending session"

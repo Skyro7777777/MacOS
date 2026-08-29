@@ -165,9 +165,10 @@ start_dialog_dismissal_loop() {
   [ -n "$DIALOG_DISMISS_PID" ] && kill -0 "$DIALOG_DISMISS_PID" 2>/dev/null && return 0
   (
     while true; do
-      # Method 1: osascript — click safe buttons by NAME
+      # Method 1: osascript — click safe buttons by NAME (lightweight, no screenshot)
       # (Accept, Allow, Later, Not Now — NEVER Cancel / Don't Allow)
-      osascript -e '
+      # This is the PRIMARY method — fast, no CPU/GPU cost, no screen capture.
+      clicked="$(osascript -e '
         try
           tell application "System Events"
             repeat with p in (every process whose background only is false)
@@ -187,18 +188,43 @@ start_dialog_dismissal_loop() {
             end repeat
           end tell
         end try
-      ' 2>/dev/null || true
+        return "none"
+      ' 2>/dev/null || echo 'none')"
 
-      # Method 2: pixel scan — find + click the blue "Allow" button
-      # (resolution-independent: scans screen center for macOS accent blue)
-      click_blue_allow_button
+      # Method 2: pixel scan — ONLY when osascript found nothing AND a dialog
+      # window is likely present (AX detects a window with "bypass"/"requesting"
+      # text). This avoids constant screencaptures that compete with RustDesk.
+      if [ "$clicked" = "none" ]; then
+        # Quick AX check: is there a window that looks like a system dialog?
+        has_dialog="$(osascript -e '
+          tell application "System Events"
+            try
+              repeat with p in (every process whose background only is false)
+                repeat with w in (windows of p)
+                  try
+                    set wName to name of w as text
+                    if wName contains "bypass" or wName contains "requesting" or wName contains "screen and audio" or wName contains "Allow" then
+                      return "yes"
+                    end if
+                  end try
+                end repeat
+              end repeat
+            end try
+          end tell
+          return "no"
+        ' 2>/dev/null || echo 'no')"
+        if [ "$has_dialog" = "yes" ]; then
+          # Dialog detected — do the pixel scan + click
+          click_blue_allow_button
+        fi
+      fi
 
-      sleep 1
+      sleep 3
     done
   ) &
   DIALOG_DISMISS_PID=$!
   disown 2>/dev/null || true
-  log "dialog-dismissal loop started (PID=$DIALOG_DISMISS_PID, interval=1s, multi-click)"
+  log "dialog-dismissal loop started (PID=$DIALOG_DISMISS_PID, AX-gated pixel scan)"
 }
 
 stop_dialog_dismissal_loop() {
