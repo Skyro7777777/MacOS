@@ -19,7 +19,9 @@ sudo launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist 2>/dev/n
 }
 
 # --- 1. restart dialog dismissal loop (covers gap until step 05) ------------
-start_dialog_dismissal_loop
+if [ "${DIALOG_HUNTING:-1}" = "1" ]; then
+  start_dialog_dismissal_loop
+fi
 
 # --- 2. verify RustDesk is listening ----------------------------------------
 if ! pgrep -x RustDesk >/dev/null 2>&1; then

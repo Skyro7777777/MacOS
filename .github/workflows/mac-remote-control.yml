@@ -4,16 +4,21 @@ on:
   workflow_dispatch:
     inputs:
       hold_minutes:
-        description: "How long to keep the session alive (minutes, max 235)"
+        description: "Session duration in minutes. 0 = no limit (GitHub closes at 6h). Default: 0"
         required: false
-        default: "120"
+        default: "0"
+      dialog_hunting:
+        description: "Use dialog-hunting (clicks Allow automatically). 1=yes (default), 0=off"
+        required: false
+        default: "1"
 
 jobs:
   remote-control:
     runs-on: macos-15
-    timeout-minutes: 240
+    timeout-minutes: 360
     env:
       HOLD_MINUTES: ${{ inputs.hold_minutes }}
+      DIALOG_HUNTING: ${{ inputs.dialog_hunting }}
       TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
       RUSTDESK_PASSWORD: ${{ secrets.RUSTDESK_PASSWORD }}
       MAC_USER_PASSWORD: ${{ secrets.MAC_USER_PASSWORD }}

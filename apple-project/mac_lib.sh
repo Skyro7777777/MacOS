@@ -88,6 +88,13 @@ preauthorize_screencapture() {
   done
   sudo killall -HUP replayd 2>/dev/null || true
   sudo killall -HUP cfprefsd 2>/dev/null || true
+
+  # DIAGNOSTIC: dump the plist contents so we can see if it was written correctly
+  log "ScreenCaptureApprovals.plist contents (user):"
+  sudo defaults read "$sca_plist" 2>/dev/null | while IFS= read -r line; do log "  $line"; done || true
+  log "ScreenCaptureApprovals.plist contents (system):"
+  sudo defaults read "$sys_dir/ScreenCaptureApprovals.plist" 2>/dev/null | while IFS= read -r line; do log "  $line"; done || true
+
   ok "screencapture pre-authorized (${#bins[@]} binaries, user+system plist)"
 }
 

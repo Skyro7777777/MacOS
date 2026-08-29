@@ -100,7 +100,14 @@ ok "RustDesk configured (port=$RUSTDESK_PORT)"
 
 # --- 3. pre-authorize screencapture + start dialog dismissal ----------------
 preauthorize_screencapture
-start_dialog_dismissal_loop
+
+# DIALOG_HUNTING=0 disables the hunting loop (test preauthorization-only mode)
+if [ "${DIALOG_HUNTING:-1}" = "1" ]; then
+  start_dialog_dismissal_loop
+else
+  log "DIALOG_HUNTING=0 — dialog hunting DISABLED (preauthorization-only mode)"
+  log "if the replayd dialog appears, it will NOT be auto-clicked"
+fi
 
 # --- 4. THE GRANT (pure sqlite3, no UI) -------------------------------------
 log "running mac_grant_tcc.py ..."

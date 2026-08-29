@@ -5,19 +5,22 @@
 #  Restarts the dialog-dismissal loop (each step is a separate shell).
 #  Exits when the done-flag appears OR the hold timeout elapses.
 #
-#  IMPORTANT: NO screenshot loop during hold! A background screencapture every
-#  15s COMPETES with RustDesk for the Screen Recording resource → causes the
-#  "connection forcibly closed" (os error 10054) + freezes every ~1 min.
-#  The dialog-dismissal loop is the only background process — it only
-#  screencaptures when it detects a dialog is present (rare), not constantly.
+#  HOLD_MINUTES=0 means NO limit (GitHub closes at 6 hours = 360 min).
+#  DIALOG_HUNTING=0 disables the dialog-hunting loop.
 # =============================================================================
 set -euo pipefail
 source "$(dirname "$0")/mac_lib.sh"
 
 log "Step 05 — holding session open for remote control"
 
-HOLD_MINUTES_INT="${HOLD_MINUTES:-120}"
-[ "$HOLD_MINUTES_INT" -gt 235 ] && HOLD_MINUTES_INT=235
+HOLD_MINUTES_INT="${HOLD_MINUTES:-0}"
+# 0 = no limit; cap at 350 to stay under GitHub's 360-min hard cap
+if [ "$HOLD_MINUTES_INT" -eq 0 ]; then
+  HOLD_MINUTES_INT=350
+  log "hold_minutes=0 → no manual limit (using 350 min max, GitHub closes at 6h)"
+elif [ "$HOLD_MINUTES_INT" -gt 350 ]; then
+  HOLD_MINUTES_INT=350
+fi
 DEADLINE=$(( $(date +%s) + HOLD_MINUTES_INT * 60 ))
 
 [ -f "$STATE_DIR/connection-info.txt" ] && cat "$STATE_DIR/connection-info.txt"
@@ -28,10 +31,12 @@ log "(end: ssh cihelper@<ip> 'touch $DONE_FLAG'  or  wait for timeout)"
 rm -f "$DONE_FLAG"
 
 # restart the dialog-dismissal loop (died with step 04's shell)
-# This is the ONLY background process. It uses osascript (lightweight) to
-# detect dialogs, and only does a screencapture+pixel-scan when a dialog is
-# likely present (detected via AX). No constant screenshots.
-start_dialog_dismissal_loop
+# DIALOG_HUNTING=0 disables it (use if you want to test preauthorization-only)
+if [ "${DIALOG_HUNTING:-1}" = "1" ]; then
+  start_dialog_dismissal_loop
+else
+  log "DIALOG_HUNTING=0 — dialog hunting DISABLED (preauthorization-only mode)"
+fi
 
 elapsed=0
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
