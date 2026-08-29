@@ -92,6 +92,8 @@ custom-fps = '60'
 enable-hwcodec = 'Y'
 # Disable adaptive bitrate (ABR can cause stutter on direct-IP connections)
 enable-abr = 'N'
+# Use texture rendering (smoother pictures; default is N on macOS)
+use-texture-render = 'Y'
 EOF
 sudo mkdir -p /var/root/Library/Preferences/com.carriez.RustDesk
 sudo cp "$RUSTDESK_USER_PREFS/RustDesk.toml" "$RUSTDESK_USER_PREFS/RustDesk2.toml" \
@@ -100,14 +102,21 @@ ok "RustDesk configured (port=$RUSTDESK_PORT)"
 
 # --- 3. pre-authorize screencapture + start dialog dismissal ----------------
 preauthorize_screencapture
+start_dialog_dismissal_loop
 
-# DIALOG_HUNTING=0 disables the hunting loop (test preauthorization-only mode)
-if [ "${DIALOG_HUNTING:-1}" = "1" ]; then
-  start_dialog_dismissal_loop
-else
-  log "DIALOG_HUNTING=0 — dialog hunting DISABLED (preauthorization-only mode)"
-  log "if the replayd dialog appears, it will NOT be auto-clicked"
-fi
+# --- 3b. set macOS dark mode + reduce transparency/motion -------------------
+# Dark mode + reduced transparency + reduced motion = FEWER pixels changing per
+# frame = LESS encoding work for RustDesk = LOWER latency.
+# These are pure UI appearance settings — they do NOT affect RustDesk's
+# connection behavior (no sleep/caffeinate/keep-awake changes).
+log "setting macOS dark mode + reduced transparency/motion..."
+sudo -u "$RUNNER_USER" defaults write NSGlobalDomain AppleInterfaceStyle -string "Dark" 2>/dev/null || true
+sudo -u "$RUNNER_USER" defaults write NSGlobalDomain AppleInterfaceStyleSwitchesAutomatically -bool false 2>/dev/null || true
+# Reduce transparency (less blur/animation = less screen changes to encode)
+sudo -u "$RUNNER_USER" defaults write com.apple.universalaccess reduceTransparency -bool true 2>/dev/null || true
+# Reduce motion (less animation = less screen changes to encode)
+sudo -u "$RUNNER_USER" defaults write com.apple.universalaccess reduceMotion -bool true 2>/dev/null || true
+ok "dark mode + reduced transparency/motion enabled (reduces encoding load)"
 
 # --- 4. THE GRANT (pure sqlite3, no UI) -------------------------------------
 log "running mac_grant_tcc.py ..."

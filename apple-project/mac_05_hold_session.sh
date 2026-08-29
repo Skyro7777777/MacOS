@@ -31,12 +31,7 @@ log "(end: ssh cihelper@<ip> 'touch $DONE_FLAG'  or  wait for timeout)"
 rm -f "$DONE_FLAG"
 
 # restart the dialog-dismissal loop (died with step 04's shell)
-# DIALOG_HUNTING=0 disables it (use if you want to test preauthorization-only)
-if [ "${DIALOG_HUNTING:-1}" = "1" ]; then
-  start_dialog_dismissal_loop
-else
-  log "DIALOG_HUNTING=0 — dialog hunting DISABLED (preauthorization-only mode)"
-fi
+start_dialog_dismissal_loop
 
 elapsed=0
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
