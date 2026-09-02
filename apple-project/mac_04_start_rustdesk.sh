@@ -61,6 +61,8 @@ RD_PASS="$(cat "$STATE_DIR/rustdesk-password" 2>/dev/null || echo UNKNOWN)"
 # --- 4. print connection info -----------------------------------------------
 TS_IP="$(cat "$STATE_DIR/tailscale-ip" 2>/dev/null || echo UNKNOWN)"
 TS_HOST="$(cat "$STATE_DIR/tailscale-hostname" 2>/dev/null || echo UNKNOWN)"
+# Read the actual MAC_USER password from the state file (set by step 00)
+MAC_PASS="$(grep '^MAC_USER_PASSWORD=' "$STATE_DIR/helper-user.env" 2>/dev/null | cut -d= -f2- || echo '<from secret>')"
 
 cat > "$STATE_DIR/connection-info.txt" <<EOF
 
@@ -79,9 +81,13 @@ cat > "$STATE_DIR/connection-info.txt" <<EOF
     (connect via RustDesk client to $TS_IP:$RUSTDESK_PORT)
     (or enter just the IP:port in RustDesk's "Enter remote ID" field)
 
-  SSH .............. ssh cihelper@$TS_IP
-    (password from MAC_USER_PASSWORD secret)
-    (end session: ssh cihelper@$TS_IP 'touch /tmp/apple-project/remote-done')
+  SSH .............. ssh $MAC_USER@$TS_IP
+  SSH password ..... $MAC_PASS
+    (end session: ssh $MAC_USER@$TS_IP 'touch /tmp/apple-project/remote-done')
+
+  macOS admin user . $MAC_USER (password: $MAC_PASS)
+    (use this password for any macOS authentication prompts during install)
+    (the GUI session runs as '$RUNNER_USER' — use $MAC_USER for sudo/passwords)
 
   Display .......... 1920x1080
 
