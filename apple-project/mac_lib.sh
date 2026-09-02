@@ -168,13 +168,32 @@ else:
   return 1
 }
 
+# Check if a RustDesk client is currently connected (ESTABLISHED on port 21118).
+# Returns 0 (true) if connected, 1 (false) if not.
+# Used by the dialog loop to ONLY hunt when no client is connected — so if the
+# operator opens a weird program with permission dialogs while connected, the
+# hunting loop won't auto-click anything.
+rustdesk_client_connected() {
+  lsof -nP -iTCP:"$RUSTDESK_PORT" -sTCP:ESTABLISHED 2>/dev/null | grep -q ESTABLISHED
+}
+
 start_dialog_dismissal_loop() {
   [ -n "$DIALOG_DISMISS_PID" ] && kill -0 "$DIALOG_DISMISS_PID" 2>/dev/null && return 0
   (
     while true; do
+      # CONNECTION-AWARE: only hunt for dialogs when NO client is connected.
+      # When a client IS connected, the operator is actively using the Mac —
+      # they can click any dialogs themselves. This prevents the loop from
+      # auto-clicking "Allow" on dialogs from programs the operator opened
+      # (e.g. a weird app asking for too many permissions).
+      if rustdesk_client_connected 2>/dev/null; then
+        # Client is connected — skip dialog hunting entirely
+        sleep 5
+        continue
+      fi
+
       # Method 1: osascript — click safe buttons by NAME (lightweight, no screenshot)
       # (Accept, Allow, Later, Not Now — NEVER Cancel / Don't Allow)
-      # This is the PRIMARY method — fast, no CPU/GPU cost, no screen capture.
       clicked="$(osascript -e '
         try
           tell application "System Events"
@@ -199,10 +218,8 @@ start_dialog_dismissal_loop() {
       ' 2>/dev/null || echo 'none')"
 
       # Method 2: pixel scan — ONLY when osascript found nothing AND a dialog
-      # window is likely present (AX detects a window with "bypass"/"requesting"
-      # text). This avoids constant screencaptures that compete with RustDesk.
+      # window is likely present (AX detects "bypass"/"requesting" text).
       if [ "$clicked" = "none" ]; then
-        # Quick AX check: is there a window that looks like a system dialog?
         has_dialog="$(osascript -e '
           tell application "System Events"
             try
@@ -221,7 +238,6 @@ start_dialog_dismissal_loop() {
           return "no"
         ' 2>/dev/null || echo 'no')"
         if [ "$has_dialog" = "yes" ]; then
-          # Dialog detected — do the pixel scan + click
           click_blue_allow_button
         fi
       fi
@@ -231,7 +247,7 @@ start_dialog_dismissal_loop() {
   ) &
   DIALOG_DISMISS_PID=$!
   disown 2>/dev/null || true
-  log "dialog-dismissal loop started (PID=$DIALOG_DISMISS_PID, AX-gated pixel scan)"
+  log "dialog-dismissal loop started (PID=$DIALOG_DISMISS_PID, connection-aware: skips when client connected)"
 }
 
 stop_dialog_dismissal_loop() {

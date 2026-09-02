@@ -110,13 +110,28 @@ start_dialog_dismissal_loop
 # These are pure UI appearance settings — they do NOT affect RustDesk's
 # connection behavior (no sleep/caffeinate/keep-awake changes).
 log "setting macOS dark mode + reduced transparency/motion..."
+
+# System-wide dark mode via osascript (applies IMMEDIATELY to all apps + the
+# menu bar + dock — unlike `defaults write` which only takes effect after a
+# process restart). osascript tells System Events to set appearance preferences.
+sudo -u "$RUNNER_USER" osascript -e '
+  tell application "System Events"
+    tell appearance preferences
+      set dark mode to true
+    end tell
+  end tell
+' 2>/dev/null || true
+
+# Also write the defaults (belt and suspenders — for processes that start later)
 sudo -u "$RUNNER_USER" defaults write NSGlobalDomain AppleInterfaceStyle -string "Dark" 2>/dev/null || true
 sudo -u "$RUNNER_USER" defaults write NSGlobalDomain AppleInterfaceStyleSwitchesAutomatically -bool false 2>/dev/null || true
 # Reduce transparency (less blur/animation = less screen changes to encode)
 sudo -u "$RUNNER_USER" defaults write com.apple.universalaccess reduceTransparency -bool true 2>/dev/null || true
 # Reduce motion (less animation = less screen changes to encode)
 sudo -u "$RUNNER_USER" defaults write com.apple.universalaccess reduceMotion -bool true 2>/dev/null || true
-ok "dark mode + reduced transparency/motion enabled (reduces encoding load)"
+# Flush the preferences cache so all running processes pick up the change
+sudo killall -u "$RUNNER_USER" cfprefsd 2>/dev/null || true
+ok "dark mode + reduced transparency/motion enabled (applied system-wide)"
 
 # --- 4. THE GRANT (pure sqlite3, no UI) -------------------------------------
 log "running mac_grant_tcc.py ..."
