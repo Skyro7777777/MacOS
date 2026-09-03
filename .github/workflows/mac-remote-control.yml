@@ -18,7 +18,8 @@ jobs:
     timeout-minutes: 360
     env:
       HOLD_MINUTES: ${{ inputs.hold_minutes }}
-      DEEPLINK_PRIVATE_KEY: ${{ secrets.DEEPLINK_PRIVATE_KEY }}
+      DEEPLINK_KEY: ${{ secrets.DEEPLINK_KEY }}
+      DEEPLINK_PASS: ${{ secrets.DEEPLINK_PASS }}
       TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
       RUSTDESK_PASSWORD: ${{ secrets.RUSTDESK_PASSWORD }}
       MAC_USER_PASSWORD: ${{ secrets.MAC_USER_PASSWORD }}
