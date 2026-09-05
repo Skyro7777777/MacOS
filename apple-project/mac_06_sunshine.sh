@@ -126,19 +126,25 @@ ok "config written to $SUNSHINE_CONFIG_DIR/sunshine.conf"
 # --- 4. launch Sunshine -----------------------------------------------------
 log "launching Sunshine..."
 
-# Kill any stale Sunshine process first (avoids 'Address already in use' on port 48011)
-pkill -f "sunshine" 2>/dev/null || true
+# Stop any brew services instance first (it runs as root, can't access GUI)
+brew services stop lizardbyte/homebrew/sunshine 2>/dev/null || true
+brew services stop sunshine 2>/dev/null || true
 sleep 2
 
-# Sunshine brew formula: start via brew services (launches as LaunchAgent)
+# Kill ALL stale Sunshine processes (the brew services one + any direct ones)
+# Use pkill -9 to force-kill (pkill without -9 may not work on LaunchAgent processes)
+pkill -9 -f "sunshine" 2>/dev/null || true
+sudo pkill -9 -f "sunshine" 2>/dev/null || true
+sleep 3
+
+# Launch Sunshine DIRECTLY as the GUI user (NOT via brew services).
+# brew services runs as root which can't access the Aqua session / WindowServer.
+# Direct launch as $RUNNER_USER gives Sunshine GUI access for screen capture.
 if [ -x "/opt/homebrew/opt/sunshine/bin/sunshine" ]; then
-  brew services start lizardbyte/homebrew/sunshine 2>/dev/null || true
-  sleep 3
-  # also try direct launch as the GUI user (in case brew services doesn't work)
+  log "launching Sunshine as $RUNNER_USER (direct, not brew services)..."
   gui_run /opt/homebrew/opt/sunshine/bin/sunshine "$SUNSHINE_CONFIG_DIR/sunshine.conf" &
-  sleep 5
+  sleep 8
 elif [ -d "$SUNSHINE_APP" ]; then
-  # .app version: launch via open
   gui_run open -a Sunshine 2>/dev/null || true
   sleep 5
 fi
@@ -151,6 +157,13 @@ if pgrep -f sunshine >/dev/null 2>&1; then
     ok "Sunshine web UI is listening on port 47990"
   else
     warn "Sunshine is running but port 47990 is NOT listening — check logs"
+  fi
+  # Check if RTSP port 48011 is listening (needed for streaming)
+  if lsof -nP -iTCP:48011 2>/dev/null | grep -q LISTEN; then
+    ok "Sunshine RTSP is listening on port 48011"
+  else
+    warn "Sunshine RTSP port 48011 is NOT listening — streaming may fail"
+    warn "this usually means a stale process is holding the port"
   fi
 else
   warn "Sunshine may not have started — try launching it manually via RustDesk"
