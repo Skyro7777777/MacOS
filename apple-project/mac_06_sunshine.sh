@@ -28,19 +28,28 @@ SUNSHINE_CONFIG_DIR="$HOME/.config/sunshine"
 # --- 1. install Sunshine ----------------------------------------------------
 if [ ! -d "$SUNSHINE_APP" ]; then
   log "installing Sunshine..."
-  # Method 1: LizardByte's homebrew tap (NOT --cask sunshine which is a font)
-  brew install LizardByte/homebrew/sunshine 2>&1 | tail -n3 || {
-    warn "brew tap install failed — trying direct DMG download"
+  # Method 1: LizardByte's homebrew tap (trust it first, then install)
+  brew tap lizardbyte/homebrew 2>/dev/null || true
+  brew trust lizardbyte/homebrew 2>/dev/null || true
+  HOMEBREW_NO_REQUIRE_TAP_TRUST=1 brew install sunshine 2>&1 | tail -n5 || {
+    warn "brew install failed — trying direct DMG download"
     # Method 2: download the macOS DMG from GitHub releases
     dmg_url="https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-macOS-arm64.dmg"
     log "downloading $dmg_url..."
     curl -fsSL "$dmg_url" -o /tmp/sunshine.dmg || die "could not download Sunshine DMG"
+    ok "downloaded $(du -h /tmp/sunshine.dmg | awk '{print $1}')"
     log "mounting DMG..."
-    mount_output="$(hdiutil attach /tmp/sunshine.dmg -nobrowse 2>&1)" || die "could not mount DMG"
+    # use -nobrowse + don't suppress stderr (to see mount errors)
+    mount_output="$(hdiutil attach /tmp/sunshine.dmg -nobrowse 2>&1)" || {
+      warn "mount failed — output: $mount_output"
+      die "could not mount Sunshine DMG"
+    }
     vol="$(echo "$mount_output" | grep -oE '/Volumes/[^ ]+' | head -1)"
-    [ -z "$vol" ] && die "could not find mounted volume"
+    [ -z "$vol" ] && die "could not find mounted volume in: $mount_output"
+    log "mounted at: $vol"
     app_src="$(find "$vol" -name '*.app' -maxdepth 1 2>/dev/null | head -1)"
-    [ -z "$app_src" ] && die "could not find .app in DMG"
+    [ -z "$app_src" ] && die "could not find .app in DMG (contents: $(ls "$vol"))"
+    log "copying $(basename "$app_src") to /Applications..."
     cp -R "$app_src" /Applications/ || die "could not copy app"
     hdiutil detach "$vol" -quiet 2>/dev/null || true
     rm -f /tmp/sunshine.dmg
