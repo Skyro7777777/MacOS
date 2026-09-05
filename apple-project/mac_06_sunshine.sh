@@ -25,22 +25,25 @@ log "Step 06 — install Sunshine (ultra-low-latency streaming HOST)"
 SUNSHINE_APP="/Applications/Sunshine.app"
 SUNSHINE_CONFIG_DIR="$HOME/.config/sunshine"
 
-# --- 1. install Sunshine via Homebrew cask ----------------------------------
+# --- 1. install Sunshine ----------------------------------------------------
 if [ ! -d "$SUNSHINE_APP" ]; then
-  log "installing Sunshine via brew..."
-  brew install --cask sunshine 2>&1 | tail -n3 || {
-    warn "brew cask install failed — trying direct download"
-    # Fallback: download the DMG from GitHub releases
-    dmg_url="$(curl -sL https://api.github.com/repos/LizardByte/Sunshine/releases/latest 2>/dev/null | \
-      python3 -c "import json,sys; d=json.load(sys.stdin); print(next(a['browser_download_url'] for a in d.get('assets',[]) if 'macos' in a['name'].lower() and a['name'].endswith('.dmg')))")"
-    if [ -n "$dmg_url" ]; then
-      curl -fsSL "$dmg_url" -o /tmp/sunshine.dmg
-      hdiutil attach /tmp/sunshine.dmg -nobrowse -quiet 2>/dev/null
-      vol="$(hdiutil info 2>/dev/null | grep '/Volumes/' | tail -1 | awk '{print $NF}')"
-      cp -R "$vol/Sunshine.app" /Applications/ 2>/dev/null
-      hdiutil detach "$vol" -quiet 2>/dev/null || true
-      rm -f /tmp/sunshine.dmg
-    fi
+  log "installing Sunshine..."
+  # Method 1: LizardByte's homebrew tap (NOT --cask sunshine which is a font)
+  brew install LizardByte/homebrew/sunshine 2>&1 | tail -n3 || {
+    warn "brew tap install failed — trying direct DMG download"
+    # Method 2: download the macOS DMG from GitHub releases
+    dmg_url="https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-macOS-arm64.dmg"
+    log "downloading $dmg_url..."
+    curl -fsSL "$dmg_url" -o /tmp/sunshine.dmg || die "could not download Sunshine DMG"
+    log "mounting DMG..."
+    mount_output="$(hdiutil attach /tmp/sunshine.dmg -nobrowse 2>&1)" || die "could not mount DMG"
+    vol="$(echo "$mount_output" | grep -oE '/Volumes/[^ ]+' | head -1)"
+    [ -z "$vol" ] && die "could not find mounted volume"
+    app_src="$(find "$vol" -name '*.app' -maxdepth 1 2>/dev/null | head -1)"
+    [ -z "$app_src" ] && die "could not find .app in DMG"
+    cp -R "$app_src" /Applications/ || die "could not copy app"
+    hdiutil detach "$vol" -quiet 2>/dev/null || true
+    rm -f /tmp/sunshine.dmg
   }
   xattr -dr com.apple.quarantine "$SUNSHINE_APP" 2>/dev/null || true
   [ -d "$SUNSHINE_APP" ] && ok "Sunshine installed" || die "Sunshine install failed"
