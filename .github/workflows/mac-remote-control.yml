@@ -7,8 +7,8 @@ on:
         description: "Session duration in minutes. 0 = no limit (GitHub closes at 6h). Default: 0"
         required: false
         default: "0"
-      deeplink:
-        description: "Also install DeepLink as an alternative. 1=yes, 0=no (default)"
+      sunshine:
+        description: "Also install Sunshine (ultra-low-latency streaming). 1=yes, 0=no (default)"
         required: false
         default: "0"
 
@@ -18,8 +18,8 @@ jobs:
     timeout-minutes: 360
     env:
       HOLD_MINUTES: ${{ inputs.hold_minutes }}
-      DEEPLINK_KEY: ${{ secrets.DEEPLINK_KEY }}
-      DEEPLINK_PASS: ${{ secrets.DEEPLINK_PASS }}
+      SUNSHINE_USER: ${{ secrets.SUNSHINE_USER }}
+      SUNSHINE_PASS: ${{ secrets.SUNSHINE_PASS }}
       TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
       RUSTDESK_PASSWORD: ${{ secrets.RUSTDESK_PASSWORD }}
       MAC_USER_PASSWORD: ${{ secrets.MAC_USER_PASSWORD }}
@@ -43,9 +43,9 @@ jobs:
       - name: Step 04 — set 1920x1080 + verify RustDesk + print connection info
         run: bash apple-project/mac_04_start_rustdesk.sh
 
-      - name: Step 05 — install DeepLink (alternative, optional)
-        if: ${{ inputs.deeplink == '1' }}
-        run: bash apple-project/mac_06_deeplink.sh
+      - name: Step 05 — install Sunshine (ultra-low-latency, optional)
+        if: ${{ inputs.sunshine == '1' }}
+        run: bash apple-project/mac_06_sunshine.sh
 
       - name: Step 06 — hold session open for remote control
         run: bash apple-project/mac_05_hold_session.sh
