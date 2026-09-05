@@ -26,24 +26,42 @@ SUNSHINE_APP="/Applications/Sunshine.app"
 SUNSHINE_CONFIG_DIR="$HOME/.config/sunshine"
 
 # --- 1. install Sunshine ----------------------------------------------------
-if [ ! -d "$SUNSHINE_APP" ]; then
+# Sunshine can be installed two ways:
+#   a) brew formula (LizardByte tap) — binary at /opt/homebrew/opt/sunshine/bin/sunshine
+#   b) DMG from GitHub releases — .app at /Applications/Sunshine.app
+# We try brew first (more reliable), then DMG fallback.
+SUNSHINE_BIN=""
+SUNSHINE_BUNDLE="com.lizardbyte.sunshine"
+
+# check if already installed (either method)
+if [ -x "/opt/homebrew/opt/sunshine/bin/sunshine" ]; then
+  SUNSHINE_BIN="/opt/homebrew/opt/sunshine/bin/sunshine"
+  log "Sunshine already installed (brew formula): $SUNSHINE_BIN"
+elif [ -d "$SUNSHINE_APP" ]; then
+  SUNSHINE_BIN="$SUNSHINE_APP/Contents/MacOS/sunshine"
+  log "Sunshine already installed (.app): $SUNSHINE_APP"
+fi
+
+if [ -z "$SUNSHINE_BIN" ]; then
   log "installing Sunshine..."
-  # Method 1: LizardByte's homebrew tap (trust it first, then install)
+  # Method 1: LizardByte's homebrew tap
   brew tap lizardbyte/homebrew 2>/dev/null || true
   brew trust lizardbyte/homebrew 2>/dev/null || true
-  HOMEBREW_NO_REQUIRE_TAP_TRUST=1 brew install sunshine 2>&1 | tail -n5 || {
-    warn "brew install failed — trying direct DMG download"
+  HOMEBREW_NO_REQUIRE_TAP_TRUST=1 brew install sunshine 2>&1 | tail -n5 || true
+
+  # check if brew install worked
+  if [ -x "/opt/homebrew/opt/sunshine/bin/sunshine" ]; then
+    SUNSHINE_BIN="/opt/homebrew/opt/sunshine/bin/sunshine"
+    ok "Sunshine installed via brew: $SUNSHINE_BIN"
+  else
+    warn "brew install didn't produce a binary — trying DMG fallback"
     # Method 2: download the macOS DMG from GitHub releases
     dmg_url="https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-macOS-arm64.dmg"
     log "downloading $dmg_url..."
     curl -fsSL "$dmg_url" -o /tmp/sunshine.dmg || die "could not download Sunshine DMG"
     ok "downloaded $(du -h /tmp/sunshine.dmg | awk '{print $1}')"
     log "mounting DMG..."
-    # use -nobrowse + don't suppress stderr (to see mount errors)
-    mount_output="$(hdiutil attach /tmp/sunshine.dmg -nobrowse 2>&1)" || {
-      warn "mount failed — output: $mount_output"
-      die "could not mount Sunshine DMG"
-    }
+    mount_output="$(hdiutil attach /tmp/sunshine.dmg -nobrowse 2>&1)" || die "could not mount DMG: $mount_output"
     vol="$(echo "$mount_output" | grep -oE '/Volumes/[^ ]+' | head -1)"
     [ -z "$vol" ] && die "could not find mounted volume in: $mount_output"
     log "mounted at: $vol"
@@ -53,15 +71,16 @@ if [ ! -d "$SUNSHINE_APP" ]; then
     cp -R "$app_src" /Applications/ || die "could not copy app"
     hdiutil detach "$vol" -quiet 2>/dev/null || true
     rm -f /tmp/sunshine.dmg
-  }
-  xattr -dr com.apple.quarantine "$SUNSHINE_APP" 2>/dev/null || true
-  [ -d "$SUNSHINE_APP" ] && ok "Sunshine installed" || die "Sunshine install failed"
-else
-  log "Sunshine already installed"
+    xattr -dr com.apple.quarantine "$SUNSHINE_APP" 2>/dev/null || true
+    SUNSHINE_BIN="$SUNSHINE_APP/Contents/MacOS/sunshine"
+    # try to read the bundle ID from the .app
+    SUNSHINE_BUNDLE="$(defaults read "$SUNSHINE_APP/Contents/Info" CFBundleIdentifier 2>/dev/null || echo 'com.lizardbyte.sunshine')"
+    ok "Sunshine installed via DMG: $SUNSHINE_APP"
+  fi
 fi
 
-SUNSHINE_BIN="$SUNSHINE_APP/Contents/MacOS/sunshine"
-SUNSHINE_BUNDLE="$(defaults read "$SUNSHINE_APP/Contents/Info" CFBundleIdentifier 2>/dev/null || echo 'com.lizardbyte.sunshine')"
+[ -z "$SUNSHINE_BIN" ] && die "Sunshine binary not found after install"
+ok "Sunshine binary: $SUNSHINE_BIN"
 ok "Sunshine bundle ID: $SUNSHINE_BUNDLE"
 
 # --- 2. grant TCC permissions (Screen Recording + Accessibility + Input Monitoring) ---
@@ -103,11 +122,18 @@ ok "config written to $SUNSHINE_CONFIG_DIR/sunshine.conf"
 
 # --- 4. launch Sunshine -----------------------------------------------------
 log "launching Sunshine..."
-# Sunshine runs as a LaunchAgent. Load it.
-launchctl load "$HOME/Library/LaunchAgents/com.lizardbyte.sunshine.plist" 2>/dev/null || true
-# Also try direct launch (in case LaunchAgent isn't installed)
-gui_run open -a Sunshine 2>/dev/null || true
-sleep 5
+# Sunshine brew formula: start via brew services (launches as LaunchAgent)
+if [ -x "/opt/homebrew/opt/sunshine/bin/sunshine" ]; then
+  brew services start lizardbyte/homebrew/sunshine 2>/dev/null || true
+  sleep 3
+  # also try direct launch as the GUI user
+  gui_run /opt/homebrew/opt/sunshine/bin/sunshine "$SUNSHINE_CONFIG_DIR/sunshine.conf" &
+  sleep 3
+elif [ -d "$SUNSHINE_APP" ]; then
+  # .app version: launch via open
+  gui_run open -a Sunshine 2>/dev/null || true
+  sleep 5
+fi
 
 # Verify it's running
 if pgrep -f sunshine >/dev/null 2>&1; then
