@@ -134,53 +134,9 @@ csrf_allowed_origins = https://$TS_IP_FOR_CONFIG:47990, https://localhost:47990,
 EOF
 ok "config written to $SUNSHINE_CONFIG_DIR/sunshine.conf (CSRF origin: $TS_IP_FOR_CONFIG)"
 
-# --- 3b. pre-create credentials (manual JSON, matching Sunshine source code) ---
-# The 'sunshine creds' CLI subcommand starts the full server (infinite loop).
-# Instead, we write the credentials JSON directly, matching the source code:
-#   save_user_creds() in httpcommon.cpp writes:
-#     {"username":"...", "salt":"<16-char-random>", "password":"<sha256_hex(pass+salt)>"}
-#   authenticate() in confighttp.cpp checks:
-#     hash = util::hex(crypto::hash(password + config::sunshine.salt))
-#   reload_user_creds() loads salt from the JSON into config::sunshine.salt
-# So: hash = sha256(password + salt_from_json).hex()
+# --- 3b. set credentials variables (will be created via API after launch) ---
 SUNSHINE_USER_VAL="${SUNSHINE_USER:-admin}"
 SUNSHINE_PASS_VAL="${SUNSHINE_PASS:-sunshine}"
-
-# Write credentials JSON directly (no sunshine binary needed)
-python3 -c "
-import json, secrets, string, hashlib
-salt = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
-password = '$SUNSHINE_PASS_VAL'
-pass_hash = hashlib.sha256((password + salt).encode()).hexdigest().upper()
-creds = {'username': '$SUNSHINE_USER_VAL', 'salt': salt, 'password': pass_hash}
-with open('$SUNSHINE_CONFIG_DIR/sunshine_state.json', 'w') as f:
-    json.dump(creds, f, indent=2)
-print(f'credentials written: user=$SUNSHINE_USER_VAL salt={salt} hash={pass_hash[:16]}...')
-" 2>/dev/null && ok "Sunshine credentials pre-created ($SUNSHINE_USER_VAL)" || warn "could not pre-create credentials"
-
-# DIAGNOSTIC: verify the credentials file exists + dump its contents
-CREDS_FILE="$SUNSHINE_CONFIG_DIR/sunshine_state.json"
-if [ -f "$CREDS_FILE" ]; then
-  log "credentials file exists at: $CREDS_FILE"
-  log "contents: $(cat "$CREDS_FILE" 2>/dev/null)"
-  # Also test the hash manually
-  python3 -c "
-import json, hashlib
-with open('$CREDS_FILE') as f:
-    creds = json.load(f)
-print(f'username: {creds.get(\"username\")}')
-print(f'salt: {creds.get(\"salt\")}')
-print(f'stored hash: {creds.get(\"password\",\"\")[:20]}...')
-test_hash = hashlib.sha256(('$SUNSHINE_PASS_VAL' + creds.get('salt','')).encode()).hexdigest().upper()
-print(f'computed hash: {test_hash[:20]}...')
-print(f'match: {test_hash == creds.get(\"password\")}')
-" 2>/dev/null
-else
-  warn "credentials file NOT found at $CREDS_FILE — Sunshine won't be able to auth"
-  log "checking what's in $SUNSHINE_CONFIG_DIR:"
-  ls -la "$SUNSHINE_CONFIG_DIR/" 2>/dev/null || log "  directory doesn't exist"
-fi
-
 export SUNSHINE_USER_VAL SUNSHINE_PASS_VAL
 
 # --- 4. launch Sunshine -----------------------------------------------------
@@ -283,6 +239,29 @@ cat >> "$STATE_DIR/connection-info.txt" <<EOF
 EOF
 
 take_screenshot "06_sunshine_launched"
+
+# --- 6b. create credentials via Sunshine API (after launch) ---
+# On first run, Sunshine has no credentials → POST /api/password works without auth.
+# This is more reliable than manually writing the JSON file.
+log "creating Sunshine credentials via API..."
+for attempt in $(seq 1 10); do
+  RESP=$(curl -sk -X POST     -H "Content-Type: application/json"     -d "{\"username\": \"$SUNSHINE_USER_VAL\", \"password\": \"$SUNSHINE_PASS_VAL\"}"     "https://localhost:47990/api/password" 2>/dev/null)
+  if echo "$RESP" | grep -q "success\|ok\|200\|true" 2>/dev/null; then
+    ok "Sunshine credentials created via API ($SUNSHINE_USER_VAL)"
+    break
+  elif [ -z "$RESP" ]; then
+    log "  attempt $attempt: no response (Sunshine may still be starting)..."
+  else
+    log "  attempt $attempt: $RESP"
+    # Maybe credentials already exist — try with auth
+    RESP2=$(curl -sk -X POST       -u "$SUNSHINE_USER_VAL:$SUNSHINE_PASS_VAL"       -H "Content-Type: application/json"       -d "{\"username\": \"$SUNSHINE_USER_VAL\", \"password\": \"$SUNSHINE_PASS_VAL\", \"currentPassword\": \"\"}"       "https://localhost:47990/api/password" 2>/dev/null)
+    if echo "$RESP2" | grep -q "success\|ok\|200\|true" 2>/dev/null; then
+      ok "Sunshine credentials updated via API (with auth)"
+      break
+    fi
+  fi
+  sleep 2
+done
 
 # --- 7. start auto-pairing daemon ---
 
