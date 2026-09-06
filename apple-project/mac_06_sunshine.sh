@@ -158,6 +158,29 @@ with open('$SUNSHINE_CONFIG_DIR/sunshine_state.json', 'w') as f:
 print(f'credentials written: user=$SUNSHINE_USER_VAL salt={salt} hash={pass_hash[:16]}...')
 " 2>/dev/null && ok "Sunshine credentials pre-created ($SUNSHINE_USER_VAL)" || warn "could not pre-create credentials"
 
+# DIAGNOSTIC: verify the credentials file exists + dump its contents
+CREDS_FILE="$SUNSHINE_CONFIG_DIR/sunshine_state.json"
+if [ -f "$CREDS_FILE" ]; then
+  log "credentials file exists at: $CREDS_FILE"
+  log "contents: $(cat "$CREDS_FILE" 2>/dev/null)"
+  # Also test the hash manually
+  python3 -c "
+import json, hashlib
+with open('$CREDS_FILE') as f:
+    creds = json.load(f)
+print(f'username: {creds.get(\"username\")}')
+print(f'salt: {creds.get(\"salt\")}')
+print(f'stored hash: {creds.get(\"password\",\"\")[:20]}...')
+test_hash = hashlib.sha256(('$SUNSHINE_PASS_VAL' + creds.get('salt','')).encode()).hexdigest()
+print(f'computed hash: {test_hash[:20]}...')
+print(f'match: {test_hash == creds.get(\"password\")}')
+" 2>/dev/null
+else
+  warn "credentials file NOT found at $CREDS_FILE — Sunshine won't be able to auth"
+  log "checking what's in $SUNSHINE_CONFIG_DIR:"
+  ls -la "$SUNSHINE_CONFIG_DIR/" 2>/dev/null || log "  directory doesn't exist"
+fi
+
 export SUNSHINE_USER_VAL SUNSHINE_PASS_VAL
 
 # --- 4. launch Sunshine -----------------------------------------------------
