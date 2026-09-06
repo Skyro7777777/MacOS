@@ -271,6 +271,66 @@ take_screenshot "06_sunshine_launched"
 #      POST /api/pin (submit PIN). All need HTTP Basic Auth.
 AUTO_PAIR_SCRIPT="/tmp/apple-project/auto_pair.py"
 cat > "$AUTO_PAIR_SCRIPT" << 'PYEOF'
+import json, time, sys, os, subprocess, base64
+
+SUNSHINE_USER = os.environ.get("SUNSHINE_USER_VAL", "admin")
+SUNSHINE_PASS = os.environ.get("SUNSHINE_PASS_VAL", "sunshine")
+
+print(f"[auto-pair] user={SUNSHINE_USER} pass={'*' * len(SUNSHINE_PASS)}", flush=True)
+
+# Test auth first with curl
+def curl(args):
+    cmd = ["curl", "-sk"] + args
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+    return result.stdout, result.stderr, result.returncode
+
+# Test: can we auth to the API?
+out, err, rc = curl(["-u", f"{SUNSHINE_USER}:{SUNSHINE_PASS}", "https://localhost:47990/api/csrf-token"])
+if rc == 0 and out:
+    print(f"[auto-pair] auth OK — csrf-token: {out[:50]}...", flush=True)
+else:
+    print(f"[auto-pair] auth FAILED — rc={rc} err={err[:100]} out={out[:100]}", flush=True)
+    # Try without auth (some endpoints don't need it)
+    out2, _, _ = curl(["https://localhost:47990/api/configLocale"])
+    print(f"[auto-pair] no-auth test: {out2[:100]}", flush=True)
+
+paired = set()
+while True:
+    try:
+        # Get CSRF token
+        csrf_out, _, _ = curl(["-u", f"{SUNSHINE_USER}:{SUNSHINE_PASS}", "https://localhost:47990/api/csrf-token"])
+        csrf_data = json.loads(csrf_out) if csrf_out else {}
+        csrf_token = csrf_data.get("token", "")
+
+        # Check for pending pairing requests
+        pin_out, _, _ = curl(["-u", f"{SUNSHINE_USER}:{SUNSHINE_PASS}", "https://localhost:47990/api/pin"])
+        if pin_out:
+            pending = json.loads(pin_out)
+            if isinstance(pending, list):
+                for item in pending:
+                    pairing_id = item.get("pairing_id", "")
+                    pin = item.get("pin", "")
+                    name = item.get("name", "Moonlight")
+                    if pairing_id and pairing_id not in paired:
+                        print(f"[auto-pair] found pairing from '{name}' (pin={pin})", flush=True)
+                        # Submit the PIN
+                        result_out, result_err, result_rc = curl([
+                            "-X", "POST",
+                            "-u", f"{SUNSHINE_USER}:{SUNSHINE_PASS}",
+                            "-H", "Content-Type: application/json",
+                            "-H", f"X-CSRF-Token: {csrf_token}",
+                            "-d", json.dumps({"pairing_id": pairing_id, "pin": pin, "name": name}),
+                            "https://localhost:47990/api/pin"
+                        ])
+                        if result_rc == 0:
+                            paired.add(pairing_id)
+                            print(f"[auto-pair] >>> PAIRED with '{name}' <<<", flush=True)
+                        else:
+                            print(f"[auto-pair] pairing failed: {result_err[:100]}", flush=True)
+    except Exception as e:
+        print(f"[auto-pair] error: {e}", flush=True)
+    time.sleep(2)
+PYEOF'
 import json, time, sys, os, urllib.request, urllib.error, ssl, base64
 
 SUNSHINE_USER = os.environ.get("SUNSHINE_USER_VAL", "admin")
