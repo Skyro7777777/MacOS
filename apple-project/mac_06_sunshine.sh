@@ -248,7 +248,7 @@ take_screenshot "06_sunshine_launched"
 # confirmNewPassword + a CSRF token (from GET /api/csrf-token).
 log "creating Sunshine credentials via API..."
 for attempt in $(seq 1 10); do
-  CSRF=$(curl -sk "https://localhost:47990/api/csrf-token" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+  CSRF=$(curl -skL "https://localhost:47990/api/csrf-token" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
   if [ -z "$CSRF" ]; then
     log "  attempt $attempt: no CSRF token (Sunshine starting)..."
     sleep 2
