@@ -23,7 +23,7 @@ source "$(dirname "$0")/mac_lib.sh"
 log "Step 06 — install Sunshine (ultra-low-latency streaming HOST)"
 
 SUNSHINE_APP="/Applications/Sunshine.app"
-SUNSHINE_CONFIG_DIR="$HOME/.config/sunshine"
+SUNSHINE_CONFIG_DIR="/Users/$RUNNER_USER/.config/sunshine"
 
 # --- 1. install Sunshine ----------------------------------------------------
 # Sunshine can be installed two ways:
