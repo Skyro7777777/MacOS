@@ -120,10 +120,14 @@ cat > "$SUNSHINE_CONFIG_DIR/sunshine.conf" <<EOF
 #   base port + 1 (47990) = HTTPS Web UI
 #   base port + 2 (47991) = Configuration UI (first-run setup)
 # We use the DEFAULT (47989) so the web UI is at 47990 as documented.
-# DO NOT set port=47990 — that would put the web UI at 47991 (confusing).
+
 # Allow access from ANY IP (Tailscale VPN IPs are seen as WAN, not LAN).
-# Default is 'lan' which blocks Tailscale connections.
 origin_web_ui_allowed = wan
+
+# Allow CSRF from any origin. The Tailscale IP changes every run, so we can't
+# hardcode it. Tailscale itself provides the network security layer.
+# Without this, creating a username/password fails with "CSRF Protection Error".
+csrf_allowed_origins = *
 EOF
 ok "config written to $SUNSHINE_CONFIG_DIR/sunshine.conf"
 
