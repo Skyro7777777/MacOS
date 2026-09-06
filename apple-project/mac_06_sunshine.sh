@@ -169,7 +169,7 @@ fi
 if pgrep -f sunshine >/dev/null 2>&1; then
   ok "Sunshine is running"
   # Check which ports are actually listening
-  for p in 47989 47990 47991 48011; do
+  for p in 47984 47989 47990 47991 48010 48011; do
     if lsof -nP -iTCP:"$p" 2>/dev/null | grep -q LISTEN; then
       ok "  port $p: LISTENING"
     else
@@ -179,6 +179,8 @@ if pgrep -f sunshine >/dev/null 2>&1; then
   # Also dump the full lsof for sunshine-related ports
   log "Sunshine port details:"
   lsof -nP -iTCP -a -p "$(pgrep -f sunshine | head -1)" 2>/dev/null | while IFS= read -r line; do log "  $line"; done || true
+  log "Sunshine UDP ports:"
+  lsof -nP -iUDP -a -p "$(pgrep -f sunshine | head -1)" 2>/dev/null | while IFS= read -r line; do log "  $line"; done || true
 else
   warn "Sunshine is NOT running — try launching it manually via RustDesk"
   log "debug: processes matching sunshine:"
