@@ -331,4 +331,55 @@ disown 2>/dev/null || true
 log "auto-pairing daemon started (PID=$AUTO_PAIR_PID) — Moonlight PINs auto-approved"
 
 take_screenshot "06_sunshine_launched"
+
+# --- 7. start auto-pairing daemon -------------------------------------------
+AUTO_PAIR_SCRIPT="/tmp/apple-project/auto_pair.py"
+cat > "$AUTO_PAIR_SCRIPT" << 'PYEOF'
+import json, time, sys, os, subprocess
+
+SUNSHINE_USER = os.environ.get("SUNSHINE_USER_VAL", "admin")
+SUNSHINE_PASS = os.environ.get("SUNSHINE_PASS_VAL", "sunshine")
+print(f"[auto-pair] user={SUNSHINE_USER}", flush=True)
+
+def curl(args):
+    try:
+        r = subprocess.run(["curl", "-sk"] + args, capture_output=True, text=True, timeout=5)
+        return r.stdout, r.stderr, r.returncode
+    except:
+        return "", "timeout", 1
+
+out, err, rc = curl(["-u", f"{SUNSHINE_USER}:{SUNSHINE_PASS}", "https://localhost:47990/api/csrf-token"])
+print(f"[auto-pair] auth test: rc={rc} out={out[:60]}", flush=True)
+
+paired = set()
+while True:
+    try:
+        csrf_out, _, _ = curl(["-u", f"{SUNSHINE_USER}:{SUNSHINE_PASS}", "https://localhost:47990/api/csrf-token"])
+        csrf = json.loads(csrf_out).get("token", "") if csrf_out else ""
+        pin_out, _, _ = curl(["-u", f"{SUNSHINE_USER}:{SUNSHINE_PASS}", "https://localhost:47990/api/pin"])
+        if pin_out:
+            for item in json.loads(pin_out) if isinstance(json.loads(pin_out), list) else []:
+                pid = item.get("pairing_id", "")
+                pin = item.get("pin", "")
+                name = item.get("name", "Moonlight")
+                if pid and pid not in paired:
+                    print(f"[auto-pair] pairing '{name}' pin={pin}", flush=True)
+                    _, _, r_rc = curl(["-X", "POST", "-u", f"{SUNSHINE_USER}:{SUNSHINE_PASS}",
+                        "-H", "Content-Type: application/json", "-H", f"X-CSRF-Token: {csrf}",
+                        "-d", json.dumps({"pairing_id": pid, "pin": pin, "name": name}),
+                        "https://localhost:47990/api/pin"])
+                    if r_rc == 0:
+                        paired.add(pid)
+                        print(f"[auto-pair] >>> PAIRED <<<", flush=True)
+    except Exception as e:
+        print(f"[auto-pair] err: {e}", flush=True)
+    time.sleep(2)
+PYEOF
+
+SUNSHINE_USER_VAL="$SUNSHINE_USER_VAL" SUNSHINE_PASS_VAL="$SUNSHINE_PASS_VAL" \
+  python3 "$AUTO_PAIR_SCRIPT" &
+AUTO_PAIR_PID=$!
+disown 2>/dev/null || true
+log "auto-pairing daemon started (PID=$AUTO_PAIR_PID)"
+
 ok "Sunshine setup complete — use Moonlight to connect for ultra-low-latency"
