@@ -247,23 +247,19 @@ take_screenshot "06_sunshine_launched"
 # The API requires: currentUsername, newUsername, currentPassword, newPassword,
 # confirmNewPassword + a CSRF token (from GET /api/csrf-token).
 log "creating Sunshine credentials via API..."
+# When username is empty (first run), POST /api/password doesn't need auth.
+# CSRF is bypassed if the Origin header matches csrf_allowed_origins.
 for attempt in $(seq 1 10); do
-  CSRF=$(curl -skL "https://localhost:47990/api/csrf-token" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
-  if [ -z "$CSRF" ]; then
-    log "  attempt $attempt: no CSRF token (Sunshine starting)..."
-    sleep 2
-    continue
-  fi
-  RESP=$(curl -sk -X POST \
+  RESP=$(curl -skL -X POST \
     -H "Content-Type: application/json" \
-    -H "X-CSRF-Token: $CSRF" \
+    -H "Origin: https://localhost:47990" \
     -d "{\"currentUsername\":\"\",\"newUsername\":\"$SUNSHINE_USER_VAL\",\"currentPassword\":\"\",\"newPassword\":\"$SUNSHINE_PASS_VAL\",\"confirmNewPassword\":\"$SUNSHINE_PASS_VAL\"}" \
-    "https://localhost:47990/api/password" 2>/dev/null)
+    "https://localhost:47990/api/password" 2>/dev/null) || true
   if echo "$RESP" | grep -q '"status":true' 2>/dev/null; then
     ok "Sunshine credentials created via API ($SUNSHINE_USER_VAL)"
     break
   else
-    log "  attempt $attempt: $RESP"
+    log "  attempt $attempt: ${RESP:-no response}"
   fi
   sleep 2
 done
