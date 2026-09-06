@@ -134,29 +134,34 @@ csrf_allowed_origins = https://$TS_IP_FOR_CONFIG:47990, https://localhost:47990,
 EOF
 ok "config written to $SUNSHINE_CONFIG_DIR/sunshine.conf (CSRF origin: $TS_IP_FOR_CONFIG)"
 
-# --- 3b. pre-create credentials (so the user doesn't need to create them) ---
-# Sunshine stores credentials in a JSON file: {"username":"...","salt":"...","password":"<sha256(pass+salt)>"}
-# Pre-creating this file skips the "welcome / create username+password" step.
+# --- 3b. pre-create credentials using Sunshine's own CLI (official method) ---
+# Sunshine has a 'creds' subcommand: sunshine creds <username> <password>
+# This creates the credentials file using Sunshine's own hashing (guaranteed correct).
 SUNSHINE_USER_VAL="${SUNSHINE_USER:-admin}"
 SUNSHINE_PASS_VAL="${SUNSHINE_PASS:-sunshine}"
-CREDS_FILE="$SUNSHINE_CONFIG_DIR/sunshine_state.json"
 
-# Generate a random salt + hash the password
-SALT="$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits) for _ in range(16)))")"
-PASS_HASH="$(python3 -c "
-import hashlib
-salt = '$SALT'
+if [ -x "/opt/homebrew/opt/sunshine/bin/sunshine" ]; then
+  log "creating Sunshine credentials via CLI (sunshine creds)..."
+  /opt/homebrew/opt/sunshine/bin/sunshine creds "$SUNSHINE_USER_VAL" "$SUNSHINE_PASS_VAL" 2>&1 | while IFS= read -r line; do log "  $line"; done || true
+  # Verify the credentials file was created
+  if [ -f "$SUNSHINE_CONFIG_DIR/sunshine_state.json" ]; then
+    ok "Sunshine credentials created via CLI ($SUNSHINE_USER_VAL)"
+  else
+    warn "sunshine creds CLI may have failed — will try manual creation"
+    # Fallback: write the JSON manually (matching the source code format exactly)
+    python3 -c "
+import json, secrets, string, hashlib
+salt = ''.join(secrets.choice(string.ascii_letters+string.digits) for _ in range(16))
 password = '$SUNSHINE_PASS_VAL'
-print(hashlib.sha256((password + salt).encode()).hexdigest())
-")"
-
-python3 -c "
-import json
-creds = {'username': '$SUNSHINE_USER_VAL', 'salt': '$SALT', 'password': '$PASS_HASH'}
-with open('$CREDS_FILE', 'w') as f:
+pass_hash = hashlib.sha256((password + salt).encode()).hexdigest()
+creds = {'username': '$SUNSHINE_USER_VAL', 'salt': salt, 'password': pass_hash}
+with open('$SUNSHINE_CONFIG_DIR/sunshine_state.json', 'w') as f:
     json.dump(creds, f, indent=2)
-print('credentials written')
-" 2>/dev/null && ok "Sunshine credentials pre-created ($SUNSHINE_USER_VAL / $SUNSHINE_PASS_VAL)" || warn "could not pre-create credentials"
+" 2>/dev/null && ok "credentials created manually" || warn "manual credential creation also failed"
+  fi
+fi
+
+export SUNSHINE_USER_VAL SUNSHINE_PASS_VAL
 
 # --- 4. launch Sunshine -----------------------------------------------------
 log "launching Sunshine..."
