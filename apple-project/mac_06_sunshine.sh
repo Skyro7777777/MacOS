@@ -151,7 +151,7 @@ python3 -c "
 import json, secrets, string, hashlib
 salt = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
 password = '$SUNSHINE_PASS_VAL'
-pass_hash = hashlib.sha256((password + salt).encode()).hexdigest()
+pass_hash = hashlib.sha256((password + salt).encode()).hexdigest().upper()
 creds = {'username': '$SUNSHINE_USER_VAL', 'salt': salt, 'password': pass_hash}
 with open('$SUNSHINE_CONFIG_DIR/sunshine_state.json', 'w') as f:
     json.dump(creds, f, indent=2)
@@ -171,7 +171,7 @@ with open('$CREDS_FILE') as f:
 print(f'username: {creds.get(\"username\")}')
 print(f'salt: {creds.get(\"salt\")}')
 print(f'stored hash: {creds.get(\"password\",\"\")[:20]}...')
-test_hash = hashlib.sha256(('$SUNSHINE_PASS_VAL' + creds.get('salt','')).encode()).hexdigest()
+test_hash = hashlib.sha256(('$SUNSHINE_PASS_VAL' + creds.get('salt','')).encode()).hexdigest().upper()
 print(f'computed hash: {test_hash[:20]}...')
 print(f'match: {test_hash == creds.get(\"password\")}')
 " 2>/dev/null
