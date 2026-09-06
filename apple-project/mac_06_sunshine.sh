@@ -243,22 +243,27 @@ take_screenshot "06_sunshine_launched"
 # --- 6b. create credentials via Sunshine API (after launch) ---
 # On first run, Sunshine has no credentials → POST /api/password works without auth.
 # This is more reliable than manually writing the JSON file.
+# On first run, Sunshine has no credentials → POST /api/password works without auth.
+# The API requires: currentUsername, newUsername, currentPassword, newPassword,
+# confirmNewPassword + a CSRF token (from GET /api/csrf-token).
 log "creating Sunshine credentials via API..."
 for attempt in $(seq 1 10); do
-  RESP=$(curl -sk -X POST     -H "Content-Type: application/json"     -d "{\"username\": \"$SUNSHINE_USER_VAL\", \"password\": \"$SUNSHINE_PASS_VAL\"}"     "https://localhost:47990/api/password" 2>/dev/null)
-  if echo "$RESP" | grep -q "success\|ok\|200\|true" 2>/dev/null; then
+  CSRF=$(curl -sk "https://localhost:47990/api/csrf-token" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+  if [ -z "$CSRF" ]; then
+    log "  attempt $attempt: no CSRF token (Sunshine starting)..."
+    sleep 2
+    continue
+  fi
+  RESP=$(curl -sk -X POST \
+    -H "Content-Type: application/json" \
+    -H "X-CSRF-Token: $CSRF" \
+    -d "{\"currentUsername\":\"\",\"newUsername\":\"$SUNSHINE_USER_VAL\",\"currentPassword\":\"\",\"newPassword\":\"$SUNSHINE_PASS_VAL\",\"confirmNewPassword\":\"$SUNSHINE_PASS_VAL\"}" \
+    "https://localhost:47990/api/password" 2>/dev/null)
+  if echo "$RESP" | grep -q '"status":true' 2>/dev/null; then
     ok "Sunshine credentials created via API ($SUNSHINE_USER_VAL)"
     break
-  elif [ -z "$RESP" ]; then
-    log "  attempt $attempt: no response (Sunshine may still be starting)..."
   else
     log "  attempt $attempt: $RESP"
-    # Maybe credentials already exist — try with auth
-    RESP2=$(curl -sk -X POST       -u "$SUNSHINE_USER_VAL:$SUNSHINE_PASS_VAL"       -H "Content-Type: application/json"       -d "{\"username\": \"$SUNSHINE_USER_VAL\", \"password\": \"$SUNSHINE_PASS_VAL\", \"currentPassword\": \"\"}"       "https://localhost:47990/api/password" 2>/dev/null)
-    if echo "$RESP2" | grep -q "success\|ok\|200\|true" 2>/dev/null; then
-      ok "Sunshine credentials updated via API (with auth)"
-      break
-    fi
   fi
   sleep 2
 done
