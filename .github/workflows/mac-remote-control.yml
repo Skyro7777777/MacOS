@@ -7,10 +7,13 @@ on:
         description: "Session duration in minutes. 0 = no limit (GitHub closes at 6h). Default: 0"
         required: false
         default: "0"
-      sunshine:
-        description: "Also install Sunshine (ultra-low-latency streaming). 1=yes, 0=no (default)"
-        required: false
-        default: "0"
+      remote_method:
+        description: "Remote control method: rustdesk (default) or moonlight"
+        type: choice
+        default: rustdesk
+        options:
+          - rustdesk
+          - moonlight
 
 jobs:
   remote-control:
@@ -18,6 +21,7 @@ jobs:
     timeout-minutes: 360
     env:
       HOLD_MINUTES: ${{ inputs.hold_minutes }}
+      REMOTE_METHOD: ${{ inputs.remote_method }}
       SUNSHINE_USER: ${{ secrets.SUNSHINE_USER }}
       SUNSHINE_PASS: ${{ secrets.SUNSHINE_PASS }}
       TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
@@ -43,8 +47,8 @@ jobs:
       - name: Step 04 — set 1920x1080 + verify RustDesk + print connection info
         run: bash apple-project/mac_04_start_rustdesk.sh
 
-      - name: Step 05 — install Sunshine (ultra-low-latency, optional)
-        if: ${{ inputs.sunshine == '1' }}
+      - name: Step 05 — install Sunshine (if moonlight selected)
+        if: ${{ inputs.remote_method == 'moonlight' }}
         run: bash apple-project/mac_06_sunshine.sh
 
       - name: Step 06 — hold session open for remote control
