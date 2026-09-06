@@ -261,78 +261,8 @@ EOF
 
 take_screenshot "06_sunshine_launched"
 
-cat > "$AUTO_PAIR_SCRIPT" << 'PYEOF'
-import json, time, sys, os, urllib.request, urllib.error, ssl, base64
+# --- 7. start auto-pairing daemon ---
 
-SUNSHINE_USER = os.environ.get("SUNSHINE_USER_VAL", "admin")
-SUNSHINE_PASS = os.environ.get("SUNSHINE_PASS_VAL", "sunshine")
-BASE_URL = "https://localhost:47990"
-
-ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
-
-auth = base64.b64encode(f"{SUNSHINE_USER}:{SUNSHINE_PASS}".encode()).decode()
-
-def api_call(method, path, data=None, csrf_token=None):
-    url = BASE_URL + path
-    headers = {"Authorization": f"Basic {auth}"}
-    if csrf_token:
-        headers["X-CSRF-Token"] = csrf_token
-    body = json.dumps(data).encode() if data else None
-    if body:
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=body, headers=headers, method=method)
-    try:
-        resp = urllib.request.urlopen(req, context=ctx, timeout=5)
-        resp_data = resp.read().decode()
-        return json.loads(resp_data) if resp_data else {}
-    except urllib.error.HTTPError as e:
-        if e.code != 404:
-            print(f"[auto-pair] HTTP {e.code}: {e.reason}", flush=True)
-        return None
-    except Exception as e:
-        return None
-
-print("[auto-pair] started — will auto-approve Moonlight pairing PINs", flush=True)
-paired = set()
-while True:
-    # Get CSRF token first (needed for POST)
-    csrf_result = api_call("GET", "/api/csrf-token")
-    csrf_token = csrf_result.get("token") if csrf_result else None
-
-    # Check for pending pairing requests
-    pending = api_call("GET", "/api/pin")
-    if pending and isinstance(pending, list):
-        for item in pending:
-            pairing_id = item.get("pairing_id", "")
-            pin = item.get("pin", "")
-            name = item.get("name", "Moonlight")
-            if pairing_id and pairing_id not in paired:
-                print(f"[auto-pair] found pairing from '{name}' — auto-submitting PIN", flush=True)
-                # Auto-submit the PIN to complete pairing
-                result = api_call("POST", "/api/pin", {
-                    "pairing_id": pairing_id,
-                    "pin": pin,
-                    "name": name
-                }, csrf_token)
-                if result is not None:
-                    paired.add(pairing_id)
-                    print(f"[auto-pair] >>> PAIRED with '{name}' <<<", flush=True)
-                else:
-                    print(f"[auto-pair] pairing failed for '{name}'", flush=True)
-    time.sleep(2)
-PYEOF
-
-SUNSHINE_USER_VAL="$SUNSHINE_USER_VAL" SUNSHINE_PASS_VAL="$SUNSHINE_PASS_VAL" \
-  python3 "$AUTO_PAIR_SCRIPT" &
-AUTO_PAIR_PID=$!
-disown 2>/dev/null || true
-log "auto-pairing daemon started (PID=$AUTO_PAIR_PID) — Moonlight PINs auto-approved"
-
-take_screenshot "06_sunshine_launched"
-
-# --- 7. start auto-pairing daemon -------------------------------------------
 AUTO_PAIR_SCRIPT="/tmp/apple-project/auto_pair.py"
 cat > "$AUTO_PAIR_SCRIPT" << 'PYEOF'
 import json, time, sys, os, subprocess
