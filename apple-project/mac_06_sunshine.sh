@@ -353,7 +353,6 @@ cat >> "$STATE_DIR/connection-info.txt" <<EOF
 
 EOF
 
-take_screenshot "06_sunshine_launched"
 
 # --- 6b. create credentials via Sunshine API (after launch) ---
 # On first run, Sunshine has no credentials → POST /api/password works without auth.

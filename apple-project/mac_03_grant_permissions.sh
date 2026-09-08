@@ -142,7 +142,6 @@ set -e
 cat "$STATE_DIR/grant_output.log"
 
 if [ "$GRANT_RC" -ne 0 ]; then
-  take_screenshot "03_grant_failed"
   die "automated granter failed (rc=$GRANT_RC)"
 fi
 ok "GRANT SUCCEEDED — 4 services in TCC.db"
@@ -168,7 +167,6 @@ if [ "$dialog_gone" = "false" ]; then
   click_blue_allow_button || true
   sleep 3
 fi
-take_screenshot "03_after_dialog_click"
 
 # --- 6. restart RustDesk to pick up the clean permission state --------------
 log "restarting RustDesk to pick up the clean permission state..."
@@ -177,4 +175,3 @@ sleep 3
 gui_run open -a RustDesk || true
 sleep 8
 ok "RustDesk restarted — screen capture should now work"
-take_screenshot "03_grant_success"

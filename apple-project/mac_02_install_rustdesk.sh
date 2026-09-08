@@ -188,7 +188,6 @@ ok "RustDesk installed: $($RUSTDESK_BIN --version 2>/dev/null || echo 'unknown v
 
 # pre-authorize screencapture (suppresses the replayd "bypass window picker" dialog)
 preauthorize_screencapture
-take_screenshot "02_after_rustdesk_install"
 
 # --- 2. write RustDesk.toml (id + password) ---------------------------------
 RUSTDESK_ID="${RUSTDESK_ID:-$(date +%s | tail -c 9)}"
@@ -258,5 +257,3 @@ ok "RustDesk id=$RUSTDESK_ID  password=********  (stored in $STATE_DIR/rustdesk-
 ok "RustDesk configured for direct-IP on port $RUSTDESK_PORT (no relay)"
 log "next step will grant Screen Recording / Accessibility / Input Monitoring"
 
-# final screenshot of step 02 state
-take_screenshot "02_end_config_complete"

@@ -56,15 +56,6 @@ RUSTDESK_PORT="21118"
 TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
 export RUSTDESK_APP RUSTDESK_BIN RUSTDESK_BUNDLE RUSTDESK_PREFS_DIR RUSTDESK_PORT TCC_DB
 
-# --- take a single screenshot (for debugging) -------------------------------
-# screencapture inherits bash's Screen Recording TCC permission.
-take_screenshot() {
-  local label="${1:-shot}"
-  mkdir -p "$STATE_DIR/screenshots"
-  local ts; ts="$(date +%Y%m%d_%H%M%S)"
-  screencapture -x -C "$STATE_DIR/screenshots/${ts}_${label}.png" 2>/dev/null || true
-}
-
 # =============================================================================
 #  Sequoia ScreenCapture pre-authorization
 #  Writes far-future dates to ScreenCaptureApprovals.plist to suppress the
