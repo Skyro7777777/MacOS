@@ -30,6 +30,17 @@ log "(end: ssh cihelper@<ip> 'touch $DONE_FLAG'  or  wait for timeout)"
 
 rm -f "$DONE_FLAG"
 
+# --- TCP keepalive: prevents RustDesk 'os error 10054' disconnects ----------
+# macOS default TCP keepalive is 2 hours (7200s) — way too long.
+# RustDesk direct-IP has no application-level keepalive, so idle TCP connections
+# get dropped by macOS after a few minutes. Setting keepidle to 60s forces
+# macOS to send TCP keepalive probes every 60s, keeping the connection alive.
+sudo sysctl -w net.inet.tcp.keepidle=60000 2>/dev/null || true
+sudo sysctl -w net.inet.tcp.keepintvl=10000 2>/dev/null || true
+sudo sysctl -w net.inet.tcp.keepcnt=5 2>/dev/null || true
+sudo sysctl -w net.inet.tcp.always_keepalive=1 2>/dev/null || true
+log "TCP keepalive set: 60s idle, 10s interval, 5 probes"
+
 # restart the dialog-dismissal loop (died with step 04's shell)
 start_dialog_dismissal_loop
 
