@@ -121,13 +121,10 @@ cat > "$SUNSHINE_CONFIG_DIR/sunshine.conf" <<EOF
 origin_web_ui_allowed = wan
 csrf_allowed_origins = https://$TS_IP_FOR_CONFIG:47990, https://localhost:47990, https://127.0.0.1:47990
 
-# --- LATENCY OPTIMIZATION ---
-max_bitrate = 10000
-min_threads = 2
-# Use H.264 (not HEVC) — HEVC causes mouse cursor glitches on Windows Moonlight
-hevc_mode = 0
-fec_percentage = 5
-qp = 24
+# Use Sunshine DEFAULTS — don't override anything.
+# The defaults are well-tuned by LizardByte for smooth streaming.
+# Overriding them (bitrate, qp, fec, etc.) caused flickering + bad quality.
+# Moonlight client-side settings handle latency optimization.
 EOF
 ok "config written to $SUNSHINE_CONFIG_DIR/sunshine.conf"
 
