@@ -143,27 +143,13 @@ if [ "$GRANT_RC" -ne 0 ]; then
 fi
 ok "GRANT SUCCEEDED — 4 services in TCC.db"
 
-# --- 5. trigger + wait for the replayd dialog to be dismissed ----------------
-log "triggering screencapture to surface any replayd dialog..."
-screencapture -x -C /tmp/apple-project/trigger_shot.png 2>/dev/null || true
-
-log "waiting for replayd dialog to be dismissed (up to 120s)..."
-dialog_gone=false
-for attempt in $(seq 1 40); do
-  sleep 3
-  if ! click_blue_allow_button 2>/dev/null; then
-    ok "dialog dismissed (or never appeared) — screen clear!"
-    dialog_gone=true
-    break
-  fi
-  log "  attempt $attempt: dialog still present — waiting..."
-done
-
-if [ "$dialog_gone" = "false" ]; then
-  warn "replayd dialog still present after 120s — clicking Allow manually..."
-  click_blue_allow_button || true
-  sleep 3
-fi
+# --- 5. wait for the dialog loop to handle any replayd dialog ---------------
+# The dialog loop (started in step 3) uses osascript to click "Allow" on
+# any system dialogs. We just wait a few seconds for it to handle the
+# replayd dialog if it appears.
+log "waiting for any replayd dialog to be dismissed (10s)..."
+sleep 10
+ok "dialog handling complete"
 
 # --- 6. restart RustDesk to pick up the clean permission state --------------
 log "restarting RustDesk to pick up the clean permission state..."

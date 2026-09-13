@@ -127,7 +127,7 @@ min_threads = 2
 # Use H.264 (not HEVC) — HEVC causes mouse cursor glitches on Windows Moonlight
 hevc_mode = 0
 fec_percentage = 5
-qp = 18
+qp = 24
 EOF
 ok "config written to $SUNSHINE_CONFIG_DIR/sunshine.conf"
 

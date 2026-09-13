@@ -90,80 +90,18 @@ preauthorize_screencapture() {
 }
 
 # =============================================================================
-#  Dialog auto-dismissal loop (RESOLUTION-INDEPENDENT)
+# =============================================================================
+#  Dialog auto-dismissal loop (LIGHTWEIGHT — no screencapture during hold)
 #
-#  Scans the screen for the macOS accent-blue "Allow" button (the replayd
-#  "bypass window picker" dialog) and clicks its center. Works at ANY
-#  resolution (1024x768, 1920x1080, etc.) by scanning the center region.
-#
-#  ALSO clicks named buttons via osascript: Accept, Allow, Later, Not Now.
-#  NEVER clicks Cancel / Don't Allow (those reject connections + deny perms).
+#  Uses osascript ONLY (no screencapture/pixel scan) to avoid competing
+#  with RustDesk for the Screen Recording resource + CPU.
+#  Clicks: Accept, Allow, Later, Not Now. NEVER Cancel / Don't Allow.
+#  When a RustDesk client IS connected: sleeps 30s (near-zero CPU).
 # =============================================================================
 DIALOG_DISMISS_PID=""
 export DIALOG_DISMISS_PID
 
-# Find + click the blue "Allow" button by scanning the screen center.
-# Returns 0 if a button was found + clicked, 1 if not.
-# OPTIMIZED: samples a small region (not the full screen) for speed.
-click_blue_allow_button() {
-  command -v python3 >/dev/null 2>&1 || return 1
-  command -v cliclick >/dev/null 2>&1 || return 1
-  local shot="/tmp/_dialog_scan.png"
-  screencapture -x -C "$shot" 2>/dev/null || return 1
-  local result
-  result="$(python3 -c "
-from PIL import Image
-im = Image.open('$shot').convert('RGB')
-w, h = im.size
-cx, cy = w//2, h//2
-blue = []
-for y in range(max(0,cy-80), min(h,cy+80)):
-    for x in range(max(0,cx-300), min(w,cx+300), 2):
-        r,g,b = im.getpixel((x,y))
-        if r<40 and 100<g<170 and b>230:
-            blue.append((x,y))
-if len(blue) < 30:
-    print('NONE')
-else:
-    from collections import Counter
-    yc = Counter(p[1] for p in blue)
-    btn_rows = {y for y,c in yc.items() if c > 15}
-    if not btn_rows:
-        print('NONE')
-    else:
-        bp = [p for p in blue if p[1] in btn_rows]
-        bxs = [p[0] for p in bp]
-        bys = [p[1] for p in bp]
-        if max(bxs)-min(bxs) > 80:
-            print(f'{min(bxs)},{min(bys)},{max(bxs)},{max(bys)}')
-        else:
-            print('NONE')
-" 2>/dev/null)"
-  rm -f "$shot"
-  if [ -n "$result" ] && [ "$result" != "NONE" ]; then
-    # result = x1,y1,x2,y2 (button bounding box)
-    local x1 y1 x2 y2 cx cy left_x right_x
-    IFS=',' read -r x1 y1 x2 y2 <<< "$result"
-    cx=$(( (x1 + x2) / 2 ))
-    cy=$(( (y1 + y2) / 2 ))
-    left_x=$(( x1 + (x2-x1)/6 ))
-    right_x=$(( x1 + (x2-x1)*5/6 ))
-    # Click MULTIPLE positions: left, center, right (center may be white text)
-    cliclick c:"$left_x","$cy" 2>/dev/null || true
-    sleep 0.3
-    cliclick c:"$cx","$cy" 2>/dev/null || true
-    sleep 0.3
-    cliclick c:"$right_x","$cy" 2>/dev/null || true
-    return 0
-  fi
-  return 1
-}
-
 # Check if a RustDesk client is currently connected (ESTABLISHED on port 21118).
-# Returns 0 (true) if connected, 1 (false) if not.
-# Used by the dialog loop to ONLY hunt when no client is connected — so if the
-# operator opens a weird program with permission dialogs while connected, the
-# hunting loop won't auto-click anything.
 rustdesk_client_connected() {
   lsof -nP -iTCP:"$RUSTDESK_PORT" -sTCP:ESTABLISHED 2>/dev/null | grep -q ESTABLISHED
 }
@@ -172,20 +110,14 @@ start_dialog_dismissal_loop() {
   [ -n "$DIALOG_DISMISS_PID" ] && kill -0 "$DIALOG_DISMISS_PID" 2>/dev/null && return 0
   (
     while true; do
-      # CONNECTION-AWARE: only hunt for dialogs when NO client is connected.
-      # When a client IS connected, the operator is actively using the Mac —
-      # they can click any dialogs themselves. This prevents the loop from
-      # auto-clicking "Allow" on dialogs from programs the operator opened
-      # (e.g. a weird app asking for too many permissions).
+      # When a client IS connected: sleep 30s (near-zero CPU, no osascript)
       if rustdesk_client_connected 2>/dev/null; then
-        # Client is connected — skip dialog hunting entirely
-        sleep 5
+        sleep 30
         continue
       fi
 
-      # Method 1: osascript — click safe buttons by NAME (lightweight, no screenshot)
-      # (Accept, Allow, Later, Not Now — NEVER Cancel / Don't Allow)
-      clicked="$(osascript -e '
+      # When NOT connected: check for dialogs via osascript (lightweight)
+      osascript -e '
         try
           tell application "System Events"
             repeat with p in (every process whose background only is false)
@@ -196,7 +128,7 @@ start_dialog_dismissal_loop() {
                       set n to name of b as text
                       if n starts with "Allow" or n is "Accept" or n is "Later" or n is "Not Now" then
                         click b
-                        return "clicked:" & n
+                        return
                       end if
                     end try
                   end repeat
@@ -205,40 +137,14 @@ start_dialog_dismissal_loop() {
             end repeat
           end tell
         end try
-        return "none"
-      ' 2>/dev/null || echo 'none')"
+      ' 2>/dev/null || true
 
-      # Method 2: pixel scan — ONLY when osascript found nothing AND a dialog
-      # window is likely present (AX detects "bypass"/"requesting" text).
-      if [ "$clicked" = "none" ]; then
-        has_dialog="$(osascript -e '
-          tell application "System Events"
-            try
-              repeat with p in (every process whose background only is false)
-                repeat with w in (windows of p)
-                  try
-                    set wName to name of w as text
-                    if wName contains "bypass" or wName contains "requesting" or wName contains "screen and audio" or wName contains "Allow" then
-                      return "yes"
-                    end if
-                  end try
-                end repeat
-              end repeat
-            end try
-          end tell
-          return "no"
-        ' 2>/dev/null || echo 'no')"
-        if [ "$has_dialog" = "yes" ]; then
-          click_blue_allow_button
-        fi
-      fi
-
-      sleep 3
+      sleep 5
     done
   ) &
   DIALOG_DISMISS_PID=$!
   disown 2>/dev/null || true
-  log "dialog-dismissal loop started (PID=$DIALOG_DISMISS_PID, connection-aware: skips when client connected)"
+  log "dialog loop started (PID=$DIALOG_DISMISS_PID, lightweight: no screencapture)"
 }
 
 stop_dialog_dismissal_loop() {
