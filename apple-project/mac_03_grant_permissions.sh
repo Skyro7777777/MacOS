@@ -81,18 +81,15 @@ allow-keyboard = 'Y'
 allow-mouse = 'Y'
 allow-restart = 'Y'
 allow-cam = 'Y'
-# --- PERFORMANCE (reduces latency from ~1s to ~100ms) ---
-# Use VP9 codec (better quality per byte than VP8; H264/H265 may not work on macOS)
+# --- CONNECTION STABILITY (fixes 'os error 10054' disconnects) ---
+# Disable auto-disconnect (don't drop idle connections)
+allow-auto-disconnect = 'N'
+# --- PERFORMANCE ---
 codec-preference = 'vp9'
-# Set image quality to best (less compression artifacts = faster visual response)
 image-quality = 'best'
-# Higher FPS = smoother cursor movement (default is 30; 60 is much more responsive)
 custom-fps = '60'
-# Enable hardware codec (uses Apple Silicon GPU for encoding — much faster)
 enable-hwcodec = 'Y'
-# Disable adaptive bitrate (ABR can cause stutter on direct-IP connections)
 enable-abr = 'N'
-# Use texture rendering (smoother pictures; default is N on macOS)
 use-texture-render = 'Y'
 EOF
 sudo mkdir -p /var/root/Library/Preferences/com.carriez.RustDesk

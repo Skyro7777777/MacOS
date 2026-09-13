@@ -124,7 +124,8 @@ csrf_allowed_origins = https://$TS_IP_FOR_CONFIG:47990, https://localhost:47990,
 # --- LATENCY OPTIMIZATION ---
 max_bitrate = 10000
 min_threads = 2
-hevc_mode = 1
+# Use H.264 (not HEVC) — HEVC causes mouse cursor glitches on Windows Moonlight
+hevc_mode = 0
 fec_percentage = 5
 qp = 18
 EOF
