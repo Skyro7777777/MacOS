@@ -238,44 +238,48 @@ class Handler(http.server.BaseHTTPRequestHandler):
             import base64
             auth = base64.b64encode(f"{SUNSHINE_USER}:{SUNSHINE_PASS}".encode()).decode()
 
-            # Get CSRF token
-            req = urllib.request.Request("https://127.0.0.1:47990/api/csrf-token",
-                headers={"Authorization": f"Basic {auth}"})
-            csrf = json.loads(urllib.request.urlopen(req, context=ctx, timeout=5).read())["csrf_token"]
+            # Use subprocess + curl for SPEED (urllib has SSL handshake overhead)
+            import subprocess
 
-            # Get pending pairings
-            req = urllib.request.Request("https://127.0.0.1:47990/api/pin",
-                headers={"Authorization": f"Basic {auth}"})
-            data = json.loads(urllib.request.urlopen(req, context=ctx, timeout=5).read())
-            pairings = data.get("pairings", [])
+            # Get CSRF token (fast — single curl call)
+            csrf_r = subprocess.run(["curl", "-sk", "-u", f"{SUNSHINE_USER}:{SUNSHINE_PASS}",
+                "https://127.0.0.1:47990/api/csrf-token"], capture_output=True, text=True, timeout=3)
+            csrf = json.loads(csrf_r.stdout).get("csrf_token", "") if csrf_r.stdout else ""
+
+            # Get pending pairings + submit PIN in ONE step (race condition-free)
+            pin_r = subprocess.run(["curl", "-sk", "-u", f"{SUNSHINE_USER}:{SUNSHINE_PASS}",
+                "https://127.0.0.1:47990/api/pin"], capture_output=True, text=True, timeout=3)
+            pairings = json.loads(pin_r.stdout).get("pairings", []) if pin_r.stdout else []
 
             if not pairings:
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/plain')
                 self.end_headers()
-                self.wfile.write(b"No pending pairing. Click Pair in Moonlight first.")
+                self.wfile.write(b"No pending pairing. Click Pair in Moonlight first, then enter PIN here.")
                 return
 
             p = pairings[0]
             pairing_id = p["id"]
             name = p.get("name", "Moonlight")
 
-            # Submit the PIN
-            body = json.dumps({"pairing_id": pairing_id, "pin": pin, "name": name}).encode()
-            req = urllib.request.Request("https://127.0.0.1:47990/api/pin", data=body,
-                headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json",
-                         "X-CSRF-Token": csrf, "Origin": "https://127.0.0.1:47990"},
-                method="POST")
-            resp = urllib.request.urlopen(req, context=ctx, timeout=5)
-            result = json.loads(resp.read())
+            # Submit the PIN immediately
+            post_data = json.dumps({"pairing_id": pairing_id, "pin": pin, "name": name})
+            submit_r = subprocess.run(["curl", "-sk", "-X", "POST",
+                "-u", f"{SUNSHINE_USER}:{SUNSHINE_PASS}",
+                "-H", "Content-Type: application/json",
+                "-H", f"X-CSRF-Token: {csrf}",
+                "-H", "Origin: https://127.0.0.1:47990",
+                "-d", post_data,
+                "https://127.0.0.1:47990/api/pin"], capture_output=True, text=True, timeout=10)
 
+            result = json.loads(submit_r.stdout) if submit_r.stdout else {}
             self.send_response(200)
             self.send_header('Content-Type', 'text/plain')
             self.end_headers()
             if result.get("status"):
                 self.wfile.write(f"✅ Paired with {name}! Connect via Moonlight now.".encode())
             else:
-                self.wfile.write(f"❌ Pairing failed: {json.dumps(result)}".encode())
+                self.wfile.write(f"❌ Pairing failed: {json.dumps(result)}. Try again — click Pair in Moonlight, then enter the new PIN.".encode())
         except Exception as e:
             self.send_response(200)
             self.send_header('Content-Type', 'text/plain')
